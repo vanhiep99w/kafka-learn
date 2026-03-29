@@ -30,13 +30,13 @@ description: "Kiến trúc Kafka Cluster: broker, leader/follower replication, I
 │                  Kafka Broker                   │
 ├─────────────────────────────────────────────────┤
 │                                                 │
-│  ┌──────────────┐  ┌──────────────┐            │
-│  │  Partition 0 │  │  Partition 2 │            │
-│  │  (Leader)    │  │  (Follower)  │            │
-│  │              │  │              │            │
-│  │ Log Segment  │  │ Log Segment  │            │
-│  │ [0, 1, 2...] │  │ [0, 1, 2...] │            │
-│  └──────────────┘  └──────────────┘            │
+│  ┌──────────────┐  ┌──────────────┐             │
+│  │  Partition 0 │  │  Partition 2 │             │
+│  │  (Leader)    │  │  (Follower)  │             │
+│  │              │  │              │             │
+│  │ Log Segment  │  │ Log Segment  │             │
+│  │ [0, 1, 2...] │  │ [0, 1, 2...] │             │
+│  └──────────────┘  └──────────────┘             │
 │                                                 │
 │  Network Layer (Producers ↔ Consumers)          │
 │  Storage Layer (Disk-based Commit Log)          │
@@ -98,16 +98,16 @@ Mỗi partition có một **Leader** và nhiều **Followers** (Replicas):
 │          Topic: orders — Partition 0 — Replication Flow              │
 ├──────────────────────────────────────────────────────────────────────┤
 │                                                                      │
-│   Producer ──────────────────────────▶ Leader (Broker 1)            │
+│   Producer ──────────────────────────▶ Leader (Broker 1)             │
 │                               Write     │                            │
 │                              Request    │  Replicate                 │
-│                                         ├──────────────▶ Follower   │
+│                                         ├──────────────▶ Follower    │
 │                                         │              (Broker 2)    │
 │                                         │                            │
-│                                         └──────────────▶ Follower   │
+│                                         └──────────────▶ Follower    │
 │                                                        (Broker 3)    │
 │                                                                      │
-│   Consumer ──────────────────────────▶ Leader (Broker 1)            │
+│   Consumer ──────────────────────────▶ Leader (Broker 1)             │
 │                               Read      (ONLY Leader serves reads)   │
 └──────────────────────────────────────────────────────────────────────┘
 ```

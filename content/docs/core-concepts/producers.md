@@ -28,16 +28,16 @@ Your Application
       │
       ▼
 ┌─────────────────────────────────────────────┐
-│              Kafka Producer                  │
-│  ┌──────────┐  ┌───────────┐  ┌──────────┐ │
-│  │Serialize │→│  Partition │→│  Buffer  │ │
-│  │ Key+Val  │  │  Selector │  │  (Batch) │ │
-│  └──────────┘  └───────────┘  └──────────┘ │
+│              Kafka Producer                 │
+│  ┌──────────┐  ┌───────────┐  ┌──────────┐  │
+│  │Serialize │→ │  Partition│→ │  Buffer  │  │
+│  │ Key+Val  │  │  Selector │  │  (Batch) │  │
+│  └──────────┘  └───────────┘  └──────────┘  │
 └─────────────────────────────────────────────┘
       │
       ▼ network
 Kafka Broker (Leader Partition)
-```
+``` 
 
 ---
 
@@ -73,15 +73,15 @@ Producer **gom nhiều messages vào một batch** trước khi gửi — tăng 
 
 ```
 ┌──────────────────────────────────────────────────────────────────┐
-│                    RecordAccumulator Buffer                       │
+│                    RecordAccumulator Buffer                      │
 │                                                                  │
-│  Partition 0 Batch: [msg1][msg2][msg3]...          16KB max     │
+│  Partition 0 Batch: [msg1][msg2][msg3]...          16KB max      │
 │  Partition 1 Batch: [msg1]                                       │
 │  Partition 2 Batch: [msg1][msg2]                                 │
 │                                                                  │
 │  Trigger gửi khi:                                                │
-│  1. Batch size >= batch.size (mặc định 16KB)  → Flush ngay      │
-│  2. linger.ms hết hạn (mặc định 0ms)          → Flush dù chưa  │
+│  1. Batch size >= batch.size (mặc định 16KB)  → Flush ngay       │
+│  2. linger.ms hết hạn (mặc định 0ms)          → Flush dù chưa    │
 │                                                full              │
 └──────────────────────────────────────────────────────────────────┘
 ```
