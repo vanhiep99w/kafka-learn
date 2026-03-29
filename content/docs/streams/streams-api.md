@@ -290,17 +290,17 @@ Enrich streaming events với lookup table data (thường là reference data):
 ├─────────────────────────────────────────────────────────────────────────────────┤
 │                                                                                 │
 │  KStream (orders):                                                              │
-│  ──[orderId=1, customerId=C1]──[orderId=2, customerId=C3]──▶                   │
+│  ──[orderId=1, customerId=C1]──[orderId=2, customerId=C3]──▶                    │
 │                                                                                 │
 │  KTable (customers):                                                            │
-│  C1 → {name: "Alice", tier: "GOLD"}                                            │
-│  C2 → {name: "Bob",   tier: "SILVER"}                                          │
-│  C3 → {name: "Carol", tier: "GOLD"}                                            │
+│  C1 → {name: "Alice", tier: "GOLD"}                                             │
+│  C2 → {name: "Bob",   tier: "SILVER"}                                           │
+│  C3 → {name: "Carol", tier: "GOLD"}                                             │
 │                                                                                 │
 │  Result (joined):                                                               │
-│  ──[order+customerInfo for C1]──[order+customerInfo for C3]──▶                 │
+│  ──[order+customerInfo for C1]──[order+customerInfo for C3]──▶                  │
 │                                                                                 │
-│  Note: LEFT JOIN semantics — if customer not in KTable, joiner returns null    │
+│  Note: LEFT JOIN semantics — if customer not in KTable, joiner returns null     │
 └─────────────────────────────────────────────────────────────────────────────────┘
 ```
 

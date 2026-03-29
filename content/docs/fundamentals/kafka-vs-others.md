@@ -23,20 +23,20 @@ Kafka **không chỉ là message queue**. Nó là **distributed commit log** —
 
 ```
 ┌─────────────────────────────────────────────────────────────────────┐
-│              Kafka Là Gì? (3 Khả Năng Trong 1)                     │
+│              Kafka Là Gì? (3 Khả Năng Trong 1)                      │
 ├─────────────────────────────────────────────────────────────────────┤
 │                                                                     │
 │  1. Message Queue / Event Bus                                       │
-│     Producer → Kafka → Consumer (nhiều consumers độc lập)          │
+│     Producer → Kafka → Consumer (nhiều consumers độc lập)           │
 │                                                                     │
 │  2. Stream Processing Platform                                      │
-│     Real-time data transformation (Kafka Streams, ksqlDB)          │
+│     Real-time data transformation (Kafka Streams, ksqlDB)           │
 │                                                                     │
 │  3. Storage / Event Log                                             │
-│     Lưu trữ events lâu dài (retention: days/weeks/forever)         │
-│     Replay lại history bất kỳ lúc nào                              │
+│     Lưu trữ events lâu dài (retention: days/weeks/forever)          │
+│     Replay lại history bất kỳ lúc nào                               │
 │                                                                     │
-│  ⚡ RabbitMQ, SQS chỉ làm được điểm 1                              │
+│  ⚡ RabbitMQ, SQS chỉ làm được điểm 1                                │
 └─────────────────────────────────────────────────────────────────────┘
 ```
 
