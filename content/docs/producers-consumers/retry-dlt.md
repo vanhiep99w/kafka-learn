@@ -29,15 +29,15 @@ description: "Non-blocking retries với Spring Kafka: @RetryableTopic, exponent
 ├─────────────────────────────────────────────────────────────────────────────────┤
 │                                                                                 │
 │   Partition 0:                                                                  │
-│   ┌────────┬──────────┬────────┬────────┬────────┐                             │
-│   │ msg 1  │  msg 2   │ msg 3  │ msg 4  │ msg 5  │                             │
-│   │  ✅ OK │ 💥 POISON│  ⏳    │  ⏳    │  ⏳    │                             │
-│   └────────┴──────────┴────────┴────────┴────────┘                             │
+│   ┌────────┬──────────┬────────┬────────┬────────┐                              │
+│   │ msg 1  │  msg 2   │ msg 3  │ msg 4  │ msg 5  │                              │
+│   │  ✅ OK │ 💥 POISON│  ⏳    │  ⏳    │  ⏳    │                              │
+│   └────────┴──────────┴────────┴────────┴────────┘                              │
 │                                                                                 │
 │   What happens without a strategy:                                              │
 │   → Consumer processes msg 1 ✅                                                 │
 │   → Consumer processes msg 2 💥 Exception!                                      │
-│   → Kafka retries msg 2 💥 Exception again!                                    │
+│   → Kafka retries msg 2 💥 Exception again!                                     │
 │   → Retry... retry... retry...                                                  │
 │   → msg 3, 4, 5 are STUCK FOREVER                                               │
 │   → Consumer lag grows indefinitely                                             │
@@ -315,18 +315,18 @@ Không phải mọi error đều nên retry. Phân loại đúng tránh lãng ph
 ```
 ┌─────────────────────────────────────────────────────────────────────────────────┐
 │                    ERROR CLASSIFICATION                                         │
-├──────────────────────────────────────┬─────────────────────────────────────────┤
-│  ✅ RETRYABLE (Transient)             │  ❌ NON-RETRYABLE (Permanent)            │
-├──────────────────────────────────────┼─────────────────────────────────────────┤
-│  Database connection timeout         │  Validation error (bad data)            │
-│  Redis unavailable                   │  Deserialization/parse error            │
-│  External API rate limit (429)       │  Business rule violation                │
-│  Network timeout                     │  Authentication/Authorization error     │
-│  Deadlock (retry may succeed)        │  Not Found (404) — won't appear         │
-│  Service temporarily down (503)      │  Data type mismatch                     │
-│                                      │  Missing required fields                │
-│  → Retry with backoff                │  → Fail fast → DLT immediately         │
-└──────────────────────────────────────┴─────────────────────────────────────────┘
+├──────────────────────────────────────┬──────────────────────────────────────────┤
+│  ✅ RETRYABLE (Transient)            │  ❌ NON-RETRYABLE (Permanent)            │
+├──────────────────────────────────────┼──────────────────────────────────────────┤
+│  Database connection timeout         │  Validation error (bad data)             │
+│  Redis unavailable                   │  Deserialization/parse error             │
+│  External API rate limit (429)       │  Business rule violation                 │
+│  Network timeout                     │  Authentication/Authorization error      │
+│  Deadlock (retry may succeed)        │  Not Found (404) — won't appear          │
+│  Service temporarily down (503)      │  Data type mismatch                      │
+│                                      │  Missing required fields                 │
+│  → Retry with backoff                │  → Fail fast → DLT immediately           │
+└──────────────────────────────────────┴──────────────────────────────────────────┘
 ```
 
 ```java
