@@ -3,6 +3,7 @@
   "pages": [
     "monitoring",
     "security",
-    "performance-tuning"
+    "performance-tuning",
+    "production-checklist"
   ]
 }

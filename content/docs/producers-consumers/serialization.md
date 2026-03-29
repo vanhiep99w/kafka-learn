@@ -29,13 +29,13 @@ Kafka truyền dữ liệu dưới dạng **bytes**. Java objects phải đượ
 ├─────────────────────────────────────────────────────────────────────┤
 │                                                                     │
 │  Producer:                                                          │
-│  OrderEvent ──[Serializer]──▶ bytes ──▶ Kafka Topic               │
+│  OrderEvent ──[Serializer]──▶ bytes ──▶ Kafka Topic                 │
 │                                                                     │
 │  Consumer:                                                          │
-│  Kafka Topic ──▶ bytes ──[Deserializer]──▶ OrderEvent             │
+│  Kafka Topic ──▶ bytes ──[Deserializer]──▶ OrderEvent               │
 │                                                                     │
 │  Key cũng cần được serialize/deserialize riêng!                     │
-│  String "order-123" ──[StringSerializer]──▶ bytes                  │
+│  String "order-123" ──[StringSerializer]──▶ bytes                   │
 └─────────────────────────────────────────────────────────────────────┘
 ```
 

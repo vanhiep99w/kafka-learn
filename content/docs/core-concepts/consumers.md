@@ -14,6 +14,7 @@ description: "Cách Kafka Consumer hoạt động: poll loop, consumer groups, p
 - [Heartbeat & Session Timeout](#heartbeat--session-timeout)
 - [auto.offset.reset](#autooffsetreset)
 - [Fan-Out vs Load Balancing](#fan-out-vs-load-balancing)
+- [Common Misconceptions](#common-misconceptions)
 
 ---
 
@@ -248,6 +249,137 @@ graph TD
 
 > [!NOTE]
 > Đây là sức mạnh cốt lõi của Kafka: **một topic, nhiều consumers độc lập**. Không cần fanout queue hay routing logic phức tạp. Thêm service mới? Chỉ cần tạo consumer group mới với group.id mới.
+
+---
+
+## Common Misconceptions
+
+### "Một partition chỉ kết nối 1 consumer?"
+
+**Trả lời**: Đúng VÀ Sai — phụ thuộc vào **Consumer Group**.
+
+| Scope | Behavior | Ví dụ |
+|-------|----------|-------|
+| **Trong 1 Group** | 1 partition → đúng 1 consumer | Group A: P0 chỉ được xử lý bởi C1 |
+| **Across Groups** | 1 partition → nhiều consumers, mỗi group 1 bản copy | Group A + Group B đều đọc P0 |
+
+```mermaid
+graph TD
+    subgraph "Topic: orders"
+        P0["Partition 0"]
+    end
+
+    subgraph "Group A: Billing Service"
+        P0 -.->|Load Balanced| C1["Consumer A-1 ✅"]
+        P0 -.->|Không nhận| C2["Consumer A-2 (IDLE)"]
+    end
+
+    subgraph "Group B: Analytics Service"
+        P0 -->|Fan Out| C3["Consumer B-1 ✅"]
+    end
+
+    note["Trong Group A: CHỈ 1 consumer nhận message\nNhưng Group B cũng nhận BẢN COPY độc lập"]
+```
+
+---
+
+### "Kafka guarantee global ordering?"
+
+**Sai** — Kafka chỉ guarantee ordering **trong 1 partition**, không phải across toàn bộ topic.
+
+```
+Gửi: msg-A (key="user1") → Partition 0
+Gửi: msg-B (key="user2") → Partition 1
+
+Consumer đọc P1 trước P0 → thấy B trước A!
+```
+
+**Fix**: Dùng cùng **Key** cho các events cần ordering (ví dụ: `orderId`, `userId`).
+
+> [!TIP]
+> Nếu không dùng key → round-robin partitioning → **không có ordering guarantee**.
+
+---
+
+### "Kafka push data cho consumer?"
+
+**Sai** — Kafka Consumer **POLL** (pull), không phải push.
+
+```
+Push (RabbitMQ):  Broker → Consumer (broker quyết định pace)
+Pull (Kafka):     Consumer → Broker (consumer quyết định pace)
+```
+
+**Lợi ích của Pull model**:
+- Consumer slow → poll ít hơn → **natural backpressure**
+- Consumer fast → poll nhiều hơn → tự động scale
+- Consumer có thể replay từ bất kỳ offset nào
+
+---
+
+### "Thêm consumer để xử lý nhanh hơn?"
+
+**Trap** — "Idle Consumer Problem": không thể có nhiều active consumers hơn số partitions.
+
+```
+Topic: 6 partitions
+Group: 8 consumers
+
+→ 6 consumers active (xử lý partitions)
+→ 2 consumers IDLE (lãng phí resources!)
+```
+
+**Formula**: `Active Consumers = min(Total Consumers, Total Partitions)`
+
+| Partitions | Consumers | Active | Idle | Nhận xét |
+|-----------|----------|--------|------|---------|
+| 6 | 3 | 3 | 0 | ✅ Có thể scale thêm |
+| 6 | 6 | 6 | 0 | ✅ Optimal |
+| 6 | 8 | 6 | **2** | ❌ 2 consumers lãng phí |
+
+> [!WARNING]
+> Thêm consumer instance mà không tăng partitions → consumer mới sẽ **idle**, không giúp xử lý nhanh hơn.
+
+---
+
+### "Auto-commit an toàn rồi?"
+
+**Không** — auto-commit có thể gây duplicate processing.
+
+```
+Timeline:
+1. Consumer poll() → nhận message
+2. Auto-commit chạy (offset +1) ← commit TRƯỚC khi xử lý xong
+3. Consumer xử lý message...
+4. 💥 Consumer crash!
+5. Consumer restart → tiếp tục từ offset đã commit
+6. → Message bị SKIP (chưa xử lý xong nhưng offset đã commit)
+
+HOẶC ngược lại:
+1. Consumer poll() → nhận message
+2. Consumer xử lý message xong
+3. 💥 Crash TRƯỚC khi auto-commit chạy
+4. Consumer restart → đọc lại message cũ
+5. → Message bị DUPLICATE
+```
+
+**Fix**: Dùng `enable.auto.commit=false` + manual acknowledge.
+
+---
+
+### "Kafka hoạt động như queue (FIFO)?"
+
+**Không hoàn toàn** — Kafka là **log** (append-only), không phải queue.
+
+| Aspect | Queue (RabbitMQ) | Kafka (Log) |
+|--------|-----------------|-------------|
+| **Message sau khi consume** | Bị xóa (ack → delete) | Giữ lại (consumer tự track offset) |
+| **Replay** | Không thể | Dễ dàng (reset offset) |
+| **Multiple consumers** | Cần fanout exchange | Tự nhiên (multiple groups) |
+| **Ordering** | Queue-level FIFO | Partition-level FIFO |
+
+> [!TIP]
+> Kafka KHÔNG xóa message khi consumer xử lý xong. Message chỉ bị xóa khi hết retention (time/size) hoặc compact.
 
 <Cards>
   <Card title="Consumer Groups" href="/core-concepts/consumer-groups/" description="Rebalancing protocol và AckMode deep dive" />

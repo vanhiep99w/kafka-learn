@@ -28,19 +28,19 @@ description: "Kafka Connect là gì, kiến trúc Source/Sink connector, Worker 
 │                    KAFKA CONNECT IN THE ECOSYSTEM                               │
 ├─────────────────────────────────────────────────────────────────────────────────┤
 │                                                                                 │
-│  External Systems ──────────────────────────────────── External Systems        │
+│  External Systems ──────────────────────────────────── External Systems         │
 │  (Databases, APIs,          Kafka Connect              (Databases, S3,          │
-│   Files, Streams)   ─────────────────────────────────  Elasticsearch, ...)     │
+│   Files, Streams)   ─────────────────────────────────  Elasticsearch, ...)      │
 │                                                                                 │
-│  ┌──────────────┐   Source   ┌─────────────────────┐   Sink   ┌─────────────┐  │
+│  ┌──────────────┐   Source   ┌─────────────────────┐   Sink   ┌──────────────┐  │
 │  │  PostgreSQL  │ ─────────▶ │                     │ ───────▶ │ Elasticsearch│  │
-│  │  MySQL       │            │   Apache Kafka       │          │ AWS S3       │  │
-│  │  MongoDB     │            │   (Topics)           │          │ BigQuery     │  │
+│  │  MySQL       │            │   Apache Kafka      │          │ AWS S3       │  │
+│  │  MongoDB     │            │   (Topics)          │          │ BigQuery     │  │
 │  │  REST API    │            │                     │          │ Snowflake    │  │
 │  │  CSV Files   │ ◀───────── │                     │ ◀─────── │ JDBC (any DB)│  │
-│  └──────────────┘   Sink     └─────────────────────┘  Source  └─────────────┘  │
+│  └──────────────┘   Sink     └─────────────────────┘  Source  └──────────────┘  │
 │                                                                                 │
-│  All without writing a single Producer or Consumer!                            │
+│  All without writing a single Producer or Consumer!                             │
 └─────────────────────────────────────────────────────────────────────────────────┘
 ```
 
@@ -133,21 +133,21 @@ graph LR
 │  Worker Process (JVM):                                                          │
 │  ┌───────────────────────────────────────────────────────────────────────────┐  │
 │  │  Connector 1: Debezium PostgreSQL (Source)                                │  │
-│  │  ┌──────────────────┐  ┌──────────────────┐  ┌──────────────────┐        │  │
-│  │  │  Task 1          │  │  Task 2          │  │  Task 3          │        │  │
-│  │  │  Table: orders   │  │  Table: payments  │  │  Table: users    │        │  │
-│  │  │  (polling WAL)   │  │  (polling WAL )  │  │  (polling WAL)   │        │  │
-│  │  └──────────┬───────┘  └──────────┬───────┘  └──────────┬───────┘        │  │
+│  │  ┌──────────────────┐  ┌──────────────────┐  ┌──────────────────┐         │  │
+│  │  │  Task 1          │  │  Task 2          │  │  Task 3          │         │  │
+│  │  │  Table: orders   │  │  Table: payments │  │  Table: users    │         │  │
+│  │  │  (polling WAL)   │  │  (polling WAL )  │  │  (polling WAL)   │         │  │
+│  │  └──────────┬───────┘  └──────────┬───────┘  └──────────┬───────┘         │  │
 │  │             │                     │                     │                 │  │
 │  │             └──────────┬──────────┘                     │                 │  │
-│  │                        ▼                               ▼                 │  │
+│  │                        ▼                                ▼                 │  │
 │  │             Kafka Producer API              Kafka Producer API            │  │
 │  └───────────────────────────────────────────────────────────────────────────┘  │
 │                                                                                 │
 │  Internal Topics (managed by Connect framework):                                │
-│  • connect-configs: Connector configurations                                   │
-│  • connect-offsets: Source connector offsets (what's been published)           │
-│  • connect-status:  Connector/task status                                      │
+│  • connect-configs: Connector configurations                                    │
+│  • connect-offsets: Source connector offsets (what's been published)            │
+│  • connect-status:  Connector/task status                                       │
 └─────────────────────────────────────────────────────────────────────────────────┘
 ```
 
