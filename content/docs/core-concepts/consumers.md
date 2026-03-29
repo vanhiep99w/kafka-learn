@@ -189,7 +189,7 @@ flowchart TD
 
     B -->|"✅ Có"| C["Resume từ\ncommitted offset"]
 
-    B -->|"❌ Không có\n(group mới)"] --> D{auto.offset.reset?}
+    B -->|"❌ Không có (group mới)"] --> D{auto.offset.reset?}
 
     D -->|"earliest"| E["Đọc từ Offset 0\nProcess TẤT CẢ messages\n(kể cả cũ)"]
     D -->|"latest"| F["Đọc từ cuối log\nChỉ nhận messages MỚI\n(bỏ qua existing)"]
