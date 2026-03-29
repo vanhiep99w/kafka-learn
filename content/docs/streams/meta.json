@@ -1,0 +1,7 @@
+{
+  "title": "Kafka Streams",
+  "pages": [
+    "streams-overview",
+    "streams-api"
+  ]
+}

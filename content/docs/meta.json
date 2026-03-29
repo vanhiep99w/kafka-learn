@@ -1,0 +1,11 @@
+{
+  "pages": [
+    "fundamentals",
+    "core-concepts",
+    "setup",
+    "producers-consumers",
+    "streams",
+    "connect",
+    "operations"
+  ]
+}

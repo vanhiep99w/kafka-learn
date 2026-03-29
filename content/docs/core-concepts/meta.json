@@ -1,0 +1,12 @@
+{
+  "title": "Core Concepts",
+  "pages": [
+    "topics-partitions",
+    "brokers-cluster",
+    "producers",
+    "consumers",
+    "consumer-groups",
+    "offsets",
+    "partitioning-strategy"
+  ]
+}
