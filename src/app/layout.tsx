@@ -19,6 +19,10 @@ const jetbrainsMono = JetBrains_Mono({
 export const metadata = {
   title: 'Kafka Learning',
   description: 'Tài liệu học Apache Kafka tiếng Việt — từ cơ bản đến nâng cao',
+  icons: {
+    icon: '/icon.svg',
+    shortcut: '/icon.svg',
+  },
 };
 
 export default function RootLayout({ children }: { children: ReactNode }) {
