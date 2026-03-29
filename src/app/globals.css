@@ -1,9 +1,17 @@
 @import 'fumadocs-ui/style.css';
-@import url('https://fonts.googleapis.com/css2?family=Inter:wght@300..700&family=JetBrains+Mono:wght@400;500;600&display=swap');
 
 :root {
-  --fd-font: 'Inter', system-ui, sans-serif;
-  --fd-font-mono: 'JetBrains Mono', monospace;
+  --fd-font: var(--font-sans), system-ui, sans-serif;
+  --fd-font-mono: var(--font-mono), ui-monospace, monospace;
+}
+
+/* Apply fonts globally */
+body {
+  font-family: var(--fd-font);
+}
+
+code, pre, kbd, samp {
+  font-family: var(--fd-font-mono);
 }
 
 /* Wider content area */
