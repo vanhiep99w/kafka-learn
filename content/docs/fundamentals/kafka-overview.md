@@ -50,38 +50,73 @@ Apache Kafka là một **distributed event streaming platform** — nền tảng
 
 Trong các hệ thống truyền thống, khi số lượng services tăng lên, việc kết nối point-to-point trở nên rất phức tạp:
 
-```
-┌──────────┐    ┌──────────┐    ┌──────────┐
-│Service A │───▶│Service B │    │Service C │
-│          │───▶│          │───▶│          │
-│          │    └──────────┘    └──────────┘
-│          │         ▲               ▲
-└──────────┘         │               │
-     ▲               └───────────────┘
-     │           Point-to-Point: n*(n-1)/2 connections
+```mermaid
+graph TB
+    subgraph "Point-to-Point: n x (n-1) / 2 connections"
+        A["Service A<br/>Order Service"]
+        B["Service B<br/>Inventory Service"]
+        C["Service C<br/>Notification Service"]
+        D["Service D<br/>Analytics Service"]
+        E["Service E<br/>Shipping Service"]
+    end
+
+    A <-->|"HTTP/gRPC"| B
+    A <-->|"HTTP/gRPC"| C
+    A <-->|"HTTP/gRPC"| D
+    B <-->|"HTTP/gRPC"| C
+    B <-->|"HTTP/gRPC"| E
+    C <-->|"HTTP/gRPC"| D
+    D <-->|"HTTP/gRPC"| E
+
+    style A fill:#f66,stroke:#333,color:#fff
+    style B fill:#f66,stroke:#333,color:#fff
+    style C fill:#f66,stroke:#333,color:#fff
+    style D fill:#f66,stroke:#333,color:#fff
+    style E fill:#f66,stroke:#333,color:#fff
 ```
 
 **Vấn đề:**
-- Với 10 services: 90 connections
-- Mỗi service cần biết địa chỉ của các services khác
+- Với 5 services: **10 connections** — với 10 services: **45 connections**
+- Mỗi service cần biết địa chỉ, protocol, retry logic của các services khác
+- Thêm service mới = cập nhật N services khác
 - Khó scale, khó maintain, dễ tạo ra bottleneck
 
 ### Với Kafka
 
-```
-┌──────────┐    ┌────────────────┐    ┌──────────┐
-│Service A │───▶│                │───▶│Service B │
-│          │    │                │    └──────────┘
-│Service C │───▶│  Kafka Cluster │───▶│Service D │
-│          │    │                │    └──────────┘
-│Service E │───▶│                │───▶│Service F │
-└──────────┘    └────────────────┘    └──────────┘
+```mermaid
+graph LR
+    subgraph Producers
+        A["Order Service"]
+        B["Payment Service"]
+        C["User Service"]
+    end
+
+    subgraph "Kafka Cluster"
+        K["Topics:<br/>orders<br/>payments<br/>user-events"]
+    end
+
+    subgraph Consumers
+        D["Inventory<br/>Service"]
+        E["Notification<br/>Service"]
+        F["Analytics<br/>Service"]
+    end
+
+    A -->|"orders"| K
+    B -->|"payments"| K
+    C -->|"user-events"| K
+
+    K --> D
+    K --> E
+    K --> F
+
+    style K fill:#4488ff,stroke:#333,color:#fff
 ```
 
 **Lợi ích:**
 - Decoupling hoàn toàn giữa producers và consumers
 - Mỗi service chỉ cần biết Kafka, không cần biết nhau
-- Dễ thêm consumer mới mà không ảnh hưởng producer
+- Thêm consumer mới = subscribe topic, không ảnh hưởng producer
+- Thêm producer mới = gửi đến topic, không ảnh hưởng consumer
 
 ---
 
