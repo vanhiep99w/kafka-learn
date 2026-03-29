@@ -34,7 +34,7 @@ Producer ──▶ [Queue] ──▶ Consumer
 ### Kafka (Event Log)
 
 ```
-Producer ──▶ [Partition: 0, 1, 2, 3, 4...] ──▶ Consumer A (offset 3)
+Producer ──▶ [Partition: 0, 1, 2, 3, 4...]   ──▶ Consumer A (offset 3)
                                              ──▶ Consumer B (offset 1)
                                              ──▶ Consumer C (offset 5)
              (message lưu lại theo thời gian)
