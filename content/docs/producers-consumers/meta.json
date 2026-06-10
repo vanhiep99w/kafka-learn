@@ -6,6 +6,7 @@
     "serialization",
     "transactions",
     "exactly-once",
+    "idempotency",
     "retry-dlt"
   ]
 }
