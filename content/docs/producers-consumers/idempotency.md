@@ -179,7 +179,7 @@ public void handle(PaymentEvent event) {
 
 ### Strategy 3 — Idempotency Key cho External API
 
-Đẩy trách nhiệm dedup cho hệ thống bên ngoài (Stripe, PayPal…) qua header idempotency key. Cơ chế đầy đủ của Stripe được mổ xẻ ở [mục 5](#5-case-study-stripe-api-xử-lý-idempotency-thế-nào).
+Đẩy trách nhiệm dedup cho hệ thống bên ngoài (Stripe, PayPal…) qua header idempotency key. Cơ chế đầy đủ của Stripe được mổ xẻ ở **mục 5** bên dưới.
 
 ```java
 RequestOptions options = RequestOptions.builder()
