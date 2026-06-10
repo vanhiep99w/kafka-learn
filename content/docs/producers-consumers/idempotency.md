@@ -179,7 +179,7 @@ public void handle(PaymentEvent event) {
 
 ### Strategy 3 — Idempotency Key cho External API
 
-Đẩy trách nhiệm dedup cho hệ thống bên ngoài (Stripe, PayPal…) qua header idempotency key:
+Đẩy trách nhiệm dedup cho hệ thống bên ngoài (Stripe, PayPal…) qua header idempotency key. Cơ chế đầy đủ của Stripe được mổ xẻ ở [mục 5](#5-case-study-stripe-api-xử-lý-idempotency-thế-nào).
 
 ```java
 RequestOptions options = RequestOptions.builder()
@@ -359,7 +359,118 @@ Mẫu số chung: **đừng tin vào kết quả CHECK đã cũ**. Hoặc gộp 
 
 ---
 
-## 5. Idempotency trong Spring Kafka — lưu ý thực chiến
+## 5. Case Study: Stripe API xử lý Idempotency thế nào?
+
+Stripe là ví dụ kinh điển nhất về một **public API** triển khai idempotency đúng và an toàn cho thanh toán. Phần này mổ xẻ cơ chế của họ, vì nó là bản mẫu (blueprint) tuyệt vời cho chính dedup logic ở consumer Kafka của bạn — và nó giải quyết **đúng** vấn đề TOCTOU ở mục 4.
+
+> [!NOTE]
+> Bối cảnh: mạng không đáng tin. Khi client gọi `POST /v1/charges` mà nhận được lỗi/timeout, nó **không biết** request đã thành công hay chưa (ambiguous failure). Nếu cứ retry mù → nguy cơ charge khách 2 lần. Idempotency key biến "retry" thành thao tác **an toàn**.
+
+### 5.1 Client gửi request kèm `Idempotency-Key`
+
+Idempotency chỉ áp dụng cho request **mutating** (`POST`). `GET` và `DELETE` vốn đã idempotent theo định nghĩa HTTP nên gửi key không có tác dụng.
+
+```sh
+curl https://api.stripe.com/v1/charges \
+  -u sk_test_xxx: \
+  -H "Idempotency-Key: 8f2b...uuid-v4..." \
+  -d amount=2000 -d currency=usd -d customer=cus_123
+```
+
+```java
+RequestOptions options = RequestOptions.builder()
+    .setIdempotencyKey(orderId)   // dùng businessId ổn định, hoặc UUID v4 đã lưu để retry
+    .build();
+Charge.create(params, options);   // gọi lại với CÙNG key → chỉ charge 1 lần
+```
+
+> [!TIP]
+> **Cách tạo key**: Stripe khuyến nghị **UUID v4** (hoặc chuỗi random đủ entropy), tối đa 255 ký tự. **Tránh** dùng dữ liệu nhạy cảm (email, số định danh cá nhân…) làm key. Quan trọng: client phải **lưu key lại** trước khi gửi để các lần retry dùng đúng key cũ — sinh key mới mỗi lần retry là vô nghĩa.
+
+### 5.2 Server làm gì với key
+
+Stripe **lưu lại status code + response body** của request **đầu tiên** ứng với mỗi key — *bất kể nó thành công hay thất bại*. Mọi request sau với cùng key sẽ nhận **lại đúng kết quả đã cache đó**, kể cả lỗi `500`.
+
+```mermaid
+sequenceDiagram
+    participant C as Client
+    participant S as Stripe API
+    participant DB as Idempotency Store
+
+    C->>S: POST /charges (Key: K1)
+    S->>DB: K1 tồn tại? → CHƯA → tạo record, soft-lock
+    S->>S: charge $20 (thực thi)
+    S->>DB: lưu {K1, 200, body, fingerprint}, mở lock
+    S-->>C: 200 OK 💥 (response mất trên mạng)
+
+    Note over C: Timeout → retry CÙNG key
+    C->>S: POST /charges (Key: K1)
+    S->>DB: K1 tồn tại? → RỒI → trả response đã cache
+    S-->>C: 200 OK (KHÔNG charge lại) ✅
+```
+
+### 5.3 Request fingerprint — chống dùng nhầm key
+
+Khi gặp lại một key đã biết, Stripe **so sánh tham số request** (một dạng fingerprint của payload) với request gốc. Nếu **khác nhau** → trả lỗi chứ không xử lý — để chặn việc vô tình dùng lại một key cho thao tác khác.
+
+```
+Lần 1: POST /charges  Key=K1  {amount: 2000}  → lưu fingerprint(amount=2000)
+Lần 2: POST /charges  Key=K1  {amount: 9999}  → fingerprint KHÁC → ❌ lỗi
+       ("Keys for idempotent requests can only be used with the same parameters")
+```
+
+### 5.4 Concurrent request — soft lock & 409 Conflict
+
+Nếu một request thứ hai với **cùng key** đến **trong khi** request đầu **đang chạy**, Stripe trả `409 Conflict` thay vì chạy song song. Đây chính là **lá chắn TOCTOU**: việc "chèn record idempotency key đầu tiên" đóng vai trò **atomic claim / soft-lock** — chỉ một request được quyền thực thi, các request đua cùng key bị từ chối.
+
+```
+┌────────────────────────────────────────────────────────────────┐
+│  Bản chất triển khai (khái niệm) — record cho mỗi key:          │
+│    idempotency_key   (UNIQUE)   ← atomic test-and-set            │
+│    request_fingerprint          ← so khớp params (mục 5.3)       │
+│    locked_at                    ← soft lock; request đua → 409   │
+│    recovery_point / state       ← đã chạy tới bước nào (5.5)     │
+│    response_code, response_body ← cache để trả lại (5.2)         │
+│    created_at                   ← prune sau ≥ 24h (5.6)          │
+└────────────────────────────────────────────────────────────────┘
+```
+
+> [!TIP]
+> Để ý sự tương đồng với **Fix 1 (insert-first + UNIQUE constraint)** ở mục 4.3: Stripe cũng "ghi dấu trước, rồi mới thực thi". UNIQUE key + soft-lock = cách diệt TOCTOU. Dedup logic ở Kafka consumer của bạn nên bắt chước đúng mô hình này.
+
+### 5.5 Recovery points — resume khi fail giữa chừng
+
+Một thao tác charge gồm nhiều bước phụ (tạo charge, ghi ledger, gọi card network…). Stripe chia thành các **giai đoạn nguyên tử** và lưu **recovery point** sau mỗi giai đoạn. Nếu request fail giữa chừng rồi được retry với cùng key, server **không làm lại từ đầu** mà **tiếp tục từ recovery point** đã lưu. Theo blog của Stripe, ba kịch bản lỗi mạng được xử lý như sau:
+
+| Loại lỗi | Server thấy gì | Hành động |
+|----------|----------------|-----------|
+| Connect fail (chưa tới server) | Lần đầu thấy key | Xử lý bình thường |
+| Fail **giữa chừng** | Có key + tiến trình dở dang | Tiếp tục từ recovery point (hoặc rollback rồi chạy lại an toàn) |
+| Fail lúc **trả response** | Key đã hoàn tất | Trả thẳng response đã cache (không chạy lại) |
+
+### 5.6 Vòng đời key & khi nào retry được
+
+- **Prune sau ≥ 24h**: key bị xoá tự động khi cũ hơn ~24 giờ. Dùng lại key sau khi đã prune → Stripe coi là request **mới**. ⇒ Idempotency key chỉ là lá chắn cho **retry ngắn hạn**, không phải dedup vĩnh viễn.
+- **Kết quả chỉ được lưu sau khi endpoint *bắt đầu thực thi***. Nếu request **fail validation** đầu vào, hoặc bị **409 do trùng concurrent**, Stripe **không** cache kết quả ⇒ các request này **retry được** an toàn.
+- **Client nên retry với exponential backoff + jitter** (Stripe SDK Ruby tự làm) để tránh *thundering herd* khi server đang gặp sự cố.
+
+### 5.7 Bảng tổng hợp hành vi Stripe
+
+| Tình huống | Hành vi của Stripe |
+|------------|--------------------|
+| Retry sau khi request đầu **thành công** | Trả lại response cache (200), không chạy lại |
+| Retry sau khi request đầu **fail có lưu** (vd 500) | Trả lại đúng lỗi 500 đã cache |
+| Request thứ 2 đến **trong lúc** request 1 đang chạy | `409 Conflict` |
+| Cùng key nhưng **khác tham số** | Lỗi — chặn dùng nhầm key |
+| Dùng key sau khi đã **prune (>24h)** | Coi như request mới |
+| Gửi key cho `GET`/`DELETE` | Bỏ qua (vốn đã idempotent) |
+
+> [!WARNING]
+> Idempotency key của Stripe bảo vệ ở **tầng API call**. Nó **không** thay thế idempotency ở phía *bạn*: nếu hệ thống của bạn gọi Stripe hai lần với **hai key khác nhau** cho cùng một đơn hàng → vẫn charge 2 lần. Vì vậy hãy **dùng businessId ổn định** (vd `orderId`) làm idempotency key, và đảm bảo logic luôn dùng lại đúng key đó khi retry.
+
+---
+
+## 6. Idempotency trong Spring Kafka — lưu ý thực chiến
 
 ```yaml
 spring:
@@ -388,7 +499,7 @@ spring:
 
 ---
 
-## 6. Tổng kết
+## 7. Tổng kết
 
 ```mermaid
 flowchart TD
@@ -407,6 +518,7 @@ flowchart TD
 - **Producer idempotency** (Kafka lo) chỉ chống retry-duplicate trong 1 session; **consumer idempotency** (bạn lo) chống crash/rebalance/replay duplicate.
 - **TOCTOU** xuất hiện ngay khi bạn viết "check rồi mới act" mà hai bước không nguyên tử — đặc biệt nguy hiểm khi có nhiều thread/instance.
 - Diệt TOCTOU bằng cách **biến check+act thành nguyên tử**: ưu tiên **insert-first + UNIQUE constraint** hoặc **conditional write**, dùng distributed lock chỉ khi side-effect trải trên nhiều hệ thống.
+- **Stripe** là bản mẫu thực chiến: `Idempotency-Key` header + cache response + request fingerprint + soft-lock (409) + recovery points + prune 24h. Hãy bắt chước mô hình này cho dedup ở consumer của bạn.
 
 <Cards>
   <Card title="Exactly-Once Semantics" href="/producers-consumers/exactly-once/" description="Idempotent producer (PID + Seq), 3 delivery guarantees" />
