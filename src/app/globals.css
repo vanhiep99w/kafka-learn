@@ -2,7 +2,19 @@
 
 :root {
   --fd-font: var(--font-sans), system-ui, sans-serif;
-  --fd-font-mono: var(--font-mono), ui-monospace, monospace;
+  /*
+    Prefer OS monospace fonts with reliable box-drawing glyphs for diagrams.
+    The Google-loaded JetBrains Mono subset can fall back differently across OSes,
+    which may break Unicode ASCII-art diagrams on Windows.
+  */
+  --fd-font-mono:
+    "Cascadia Mono",
+    "Cascadia Code",
+    "Consolas",
+    "DejaVu Sans Mono",
+    "Liberation Mono",
+    "Courier New",
+    monospace;
 }
 
 /* Apply fonts globally */
@@ -12,6 +24,7 @@ body {
 
 code, pre, kbd, samp {
   font-family: var(--fd-font-mono);
+  font-variant-ligatures: none;
 }
 
 /* Wider content area */
@@ -36,6 +49,10 @@ code, pre, kbd, samp {
 
 .prose pre {
   font-size: 0.875rem;
+  white-space: pre;
+  overflow-x: auto;
+  tab-size: 2;
+  line-height: 1.5;
 }
 
 .prose table {
