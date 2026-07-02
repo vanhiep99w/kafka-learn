@@ -17,6 +17,7 @@ description: "Hands-on config cho các connectors phổ biến nhất: Debezium 
 - [Schema Evolution với Schema Registry](#schema-evolution-với-schema-registry)
 - [Error Handling & Dead Letter Queue](#error-handling--dead-letter-queue)
 - [Monitoring Connectors](#monitoring-connectors)
+- [Troubleshooting thường gặp](#troubleshooting-thường-gặp)
 
 ---
 
@@ -603,6 +604,60 @@ done
 
 exit $FAILED
 ```
+
+---
+
+## Troubleshooting thường gặp
+
+Khi connector không chạy đúng, đây là các lỗi phổ biến và cách chẩn đoán + fix.
+
+### Bảng lỗi Debezium / Source connector
+
+| Triệu chứng | Nguyên nhân | Cách chẩn đoán | Fix |
+|-------------|-------------|----------------|-----|
+| **Connector status `FAILED`** sau vài giờ | Replication slot đầy (PostgreSQL giữ WAL vì consumer không đọc kịp) | `SELECT slot_name, active, pg_wal_lsn_diff(pg_current_wal_lsn(), restart_lsn) AS lag FROM pg_replication_slots;` — nếu `lag` lớn (GB) → slot đang tích lũy | Tăng throughput task (`tasks.max`), đảm bảo connector RUNNING, hoặc tăng `max.batch.size`. Nếu slot hỏng: xóa slot cũ + recreate connector |
+| **WAL retention quá lớn** ở source DB | Debezium cần giữ WAL từ `restart_lsn` — nếu connector chết lâu, WAL phình to | Kiểm tra `pg_replication_slots` (như trên) + dung lượng đĩa DB | Restart connector sớm; set `slot.drop.on.stop=true` nếu chấp nhận snapshot lại khi restart (mất incremental) |
+| **Schema mismatch** khi Avro | DB schema thay đổi (thêm/cột) nhưng Schema Registry chưa có version mới | Log connector: `SchemaRegistryException: schema not found` hoặc `incompatible` | Đăng ký schema mới; kiểm tra `value.converter.schema.registry.url` đúng; dùng `BACKWARD` compatibility mode |
+| **Connector `RESTARTING` liên tục** | Task crash loop (thường do DB connection hết pool, hoặc network DB↔Connect) | `GET /connectors/{name}/status` xem `trace`; check DB log | Tăng DB connection pool; kiểm tra network; xem `errors.tolerance` và DLQ |
+| **Snapshot không tiến hành** (source không produce gì) | `snapshot.mode` sai, hoặc bảng không match `table.include.list` | `GET /connectors/{name}/status` → task RUNNING nhưng `source-record-write-rate=0` | Verify `snapshot.mode=initial` (lần đầu); check `table.include.list` regex khớp tên bảng; check quyền user DB (`REPLICATION`, `LOGIN`) |
+| **Duplicate records** sau restart | Snapshot lại từ đầu vì không tìm được recovery marker | Log: `Performing snapshot since no offsets found` | Đảm bảo `offset.storage.topic` được giữ (không xóa); set `snapshot.mode=never` sau lần snapshot đầu thành công |
+
+### Bảng lỗi Sink connector (JDBC, S3, Elasticsearch)
+
+| Triệu chứng | Nguyên nhân | Fix |
+|-------------|-------------|-----|
+| **Sink lag tăng dần** (`sink-record-lag-max` lớn) | Task ghi downstream chậm hơn Kafka deliver | Tăng `tasks.max`, `batch.size`; kiểm tra index/throughput của target (DB, ES) |
+| **`org.postgresql.util.PSQLException: FATAL: too many connections`** | Mỗi task mở nhiều connection → vượt pool DB | Giảm `tasks.max` hoặc tăng DB `max_connections`; dùng connection pooling (`consumer.override.group.id`) |
+| **S3 sink ghi file sai partition** | `partitioner` sai (mặc định `Default` ghi vào 1 prefix) | Set `partitioner.class=io.confluent.connect.storage.partitioner.TimeBasedPartitioner` + `partition.duration.ms` |
+| **ES sink `version conflict`** | Idempotency: cùng key ghi đè, ES reject vì version cũ | Set `behavior.on.malformed.documents=IGNORE` hoặc dùng `key.ignore=false` + unique document id |
+| **DLQ đầy nhưng main flow vẫn chậm** | Poison pill bị retry chặn main task | Set `errors.tolerance=all` + `errors.deadletterqueue.topic.name`; xem DLQ và fix poison pill riêng |
+
+### Lệnh chẩn đoán nhanh
+
+```bash
+# 1. Status tất cả connector
+curl -s http://localhost:8083/connectors | jq '.[]' | while read c; do
+  curl -s "http://localhost:8083/connectors/$c/status" | jq '{name:.name, state:.connector.state, tasks:[.tasks[].state]}'
+done
+
+# 2. Restart một connector (giữ offset, không snapshot lại)
+curl -X POST http://localhost:8083/connectors/inventory-connector/restart
+
+# 3. Xem WAL lag trên PostgreSQL source
+psql -c "SELECT slot_name, active,
+         pg_size_pretty(pg_wal_lsn_diff(pg_current_wal_lsn(), restart_lsn)) AS lag
+         FROM pg_replication_slots WHERE slot_type='logical';"
+
+# 4. Xem DLQ message gần nhất
+kafka-console-consumer --bootstrap-server localhost:9092 \
+  --topic my-connector-dlt --from-beginning --max-messages 5
+
+# 5. Kiểm tra schema compatibility
+curl -s http://localhost:8081/config/my-topic-value | jq .
+```
+
+> [!CAUTION]
+> **Không bao giờ xóa replication slot khi connector chỉ tạm thời chết.** Xóa slot = mất khả năng CDC từ điểm dừng → connector phải snapshot lại toàn bộ bảng (chậm, nặng cho DB). Chỉ xóa slot khi chắc chắn không cần incremental nữa.
 
 <Cards>
   <Card title="Connect Overview" href="/connect/connect-overview/" description="Architecture, REST API, Worker modes" />

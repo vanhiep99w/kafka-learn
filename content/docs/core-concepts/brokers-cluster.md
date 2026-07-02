@@ -13,6 +13,7 @@ description: "Kiến trúc Kafka Cluster: broker, leader/follower replication, I
 - [ISR — In-Sync Replicas](#isr--in-sync-replicas)
 - [Replication Factor](#replication-factor)
 - [Fault Tolerance Scenarios](#fault-tolerance-scenarios)
+- [Controller & KRaft Mode](#controller--kraft-mode)
 - [Cluster Configuration](#cluster-configuration)
 
 ---
@@ -241,6 +242,93 @@ sequenceDiagram
     L->>ISR: Add B2 back to ISR
     Note over ISR: ISR = {B1, B2, B3}
 ```
+
+---
+
+## Controller & KRaft Mode
+
+### Controller là gì?
+
+Trong một Kafka cluster, có một broker đóng vai trò đặc biệt: **Controller**. Controller chịu trách nhiệm quản lý **metadata toàn cluster** — biết topic nào có bao nhiêu partition, mỗi partition có leader là broker nào, ISR gồm những broker nào. Khi một broker chết, Controller là người quyết định bầu lại leader cho các partition bị ảnh hưởng.
+
+```
+Cluster 5 broker — Broker 1 là Controller:
+
+  Broker 1 (Controller) ─── giữ metadata toàn cluster
+       │   • partition → leader mapping
+       │   • ISR set từng partition
+       │   • broker sống/chết
+       │
+  Broker 2, 3, 4, 5 ─── broker thường, nghe lệnh Controller
+```
+
+### ZooKeeper — cách cũ (đã bị loại bỏ)
+
+Trước Kafka 4.0, Kafka dùng **ZooKeeper** (một service riêng) để lưu metadata. Controller đọc/ghi metadata qua ZooKeeper. Cách này có 2 vấn đề:
+
+1. **Phải vận hành thêm một cluster ZooKeeper** — thêm độ phức tạp vận hành, thêm điểm fail.
+2. **Scale khó**: khi cluster có hàng chục nghìn partition, Controller phải ghi metadata vào ZooKeeper → ZooKeeper trở thành bottleneck (đặc biệt khi broker chết, phải elect lại leader hàng nghìn partition cùng lúc).
+
+### KRaft Mode — cách mới (mặc định từ Kafka 4.0)
+
+**KRaft (Kafka Raft)** đưa metadata vào **chính Kafka** — không cần ZooKeeper nữa. Một nhóm broker (gọi là **controller quorum**) dùng thuật toán **Raft** để đồng bộ metadata, tự bầu leader khi cần.
+
+```
+KRaft Mode:
+
+  Controller Quorum (3 broker chạy role controller):
+  Broker 1 (Active Controller) ◀──┐
+  Broker 2 (Controller)         ──┤  Raft consensus
+  Broker 3 (Controller)         ──┘  (metadata lưu trong internal topic __cluster_metadata)
+
+  Broker 4, 5 (broker thường) ─── chỉ chứa data partition, nghe Controller
+```
+
+### So sánh ZooKeeper vs KRaft
+
+| Khía cạnh | ZooKeeper (cũ) | KRaft (mới) |
+|-----------|----------------|-------------|
+| Thành phần vận hành | Kafka + ZooKeeper (2 cluster) | Chỉ Kafka (1 hệ thống) |
+| Metadata storage | ZooKeeper zNode | Internal topic `__cluster_metadata` |
+| Scale giới hạn | ~200.000 partition/cluster (ZK bottleneck) | **Hàng triệu partition** |
+| Controller failover | Chậm (phải đọc lại metadata từ ZK) | **Nhanh** (metadata đã sẵn trong topic, Raft elect < giây) |
+| Vận hành | Phải tune ZooKeeper riêng | Đơn giản hơn, một stack |
+
+> [!IMPORTANT]
+> **Kafka 4.0 (phát hành 2025) đã bỏ hoàn toàn ZooKeeper.** KRaft là kiến trúc mặc định và duy nhất. Nếu bạn dùng Kafka 4.0+, không cần quan tâm ZooKeeper nữa. Nếu dùng Kafka 3.x, KRaft đã sẵn sàng (opt-in) và được khuyến nghị cho cluster mới.
+
+### Cấu hình KRaft
+
+Mỗi broker có `process.roles` xác định vai trò:
+
+```properties
+# server.properties — KRaft mode
+process.roles=broker,controller       # vừa broker vừa controller (dev), hoặc 1 trong 2 (prod)
+node.id=1
+controller.quorum.voters=1@broker1:9093,2@broker2:9093,3@broker3:9093
+listeners=PLAINTEXT://:9092,CONTROLLER://:9093
+controller.listener.names=CONTROLLER
+inter.broker.listener.name=PLAINTEXT
+log.dirs=/var/kafka/logs
+```
+
+| `process.roles` | Vai trò | Khi nào dùng |
+|-----------------|---------|--------------|
+| `broker` | Chỉ chứa data partition | Production (tách biệt vai trò) |
+| `controller` | Chỉ quản lý metadata | Production (controller chuyên dụng) |
+| `broker,controller` | Cả hai | Dev/Test (tiết kiệm node) |
+
+> [!TIP]
+> Production nên tách: một nhóm 3 broker làm **controller** (chỉ quản lý metadata), một nhóm N broker làm **broker** (chỉ chứa data). Tách biệt giúp tải data không ảnh hưởng tới controller, và controller failover nhanh hơn.
+
+### Vì sao KRaft quan trọng cho bạn?
+
+- **Vận hành đơn giản hơn**: không còn ZooKeeper để cài đặt, tune, monitor, backup.
+- **Recovery nhanh hơn**: khi broker chết, Controller mới nhận quyền trong < 1 giây (Raft) thay vì chục giây (ZK).
+- **Scale tốt hơn**: cluster lớn (hàng trăm nghìn partition) không còn bị bottleneck metadata.
+
+> [!CAUTION]
+> Nếu đang chạy Kafka cũ với ZooKeeper và muốn chuyển sang KRaft: Kafka cung cấp **migration tool** (từ 3.4+). Quá trình migration yêu cầu cẩn thận — đọc kỹ documentation chính thức trước khi thực hiện trên production.
 
 ---
 

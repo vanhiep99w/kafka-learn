@@ -79,7 +79,7 @@ Partition 0 (commit log):
 
 ## 4. Vì sao Kafka phải xóa message (retention)
 
-Nếu Kafka giữ mọi message mãi mãi,会发生 gì?
+Nếu Kafka giữ mọi message mãi mãi, sẽ xảy ra gì?
 
 ```
 Giả sử Kafka KHÔNG xóa message:
@@ -94,7 +94,7 @@ Thiết kế: Kafka tối ưu cho "đọc gần đây, ghi nhanh"
 
 Vì vậy Kafka có cơ chế **retention** — tự động xóa message cũ theo thời gian hoặc kích thước:
 
-```diagram
+```text
 Topic: events (retention.ms = 604800000  → 7 ngày)
 
    T = hôm nay
@@ -193,7 +193,7 @@ Topic nội bộ `__consumer_offsets` dùng **compact** — với mỗi key `(gr
 
 Một hiểu lầm phổ biến: tưởng offset giống primary key, có thể "select offset=1234". **Không**.
 
-```diagram
+```text
 Database:  SELECT * FROM orders WHERE id = 1234    ← query được (có index)
 
 Kafka:     consumer.seek(partition, 1234)           ← chỉ "nhảy đến vị trí"

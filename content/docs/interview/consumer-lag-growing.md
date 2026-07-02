@@ -183,7 +183,7 @@ TÌNH HUỐNG HOT KEY (1 user VIP chiếm 80% traffic):
 
 Vì bạn có **4 partition, 4 consumer** — theo lý thuyết là đã tối ưu. Nhưng thực tế chỉ có **1 partition (P2) làm việc thực sự**, 3 consumer còn lại gần như idle. Thêm consumer thứ 5, 6, 7 → vẫn vô ích, vì P2 vẫn chỉ được gán cho 1 consumer duy nhất.
 
-```diagram
+```text
 Lag per partition cho thấy vấn đề:
 
    P0: lag = 7      (consumer 1 theo kịp)
@@ -214,7 +214,7 @@ Chi tiết 4 giải pháp (kèm code Java) trong bài [Partitioning Strategy](/c
 
 ## 7. Nguyên nhân 3: Rebalance storm
 
-Nguyên nhân này rất khó đoán vì **bề ngoài trông giống "consumer đang chạy"**, nhưng thực ra consumer liên tục bị gián đoạn. Hiểu đơn giản: consumer **bị踢 ra rồi join lại group liên tục**.
+Nguyên nhân này rất khó đoán vì **bề ngoài trông giống "consumer đang chạy"**, nhưng thực ra consumer liên tục bị gián đoạn. Hiểu đơn giản: consumer **bị đẩy ra rồi join lại group liên tục**.
 
 ### Hiện tượng
 
@@ -319,7 +319,7 @@ Consumer gọi downstream API:
 **Dấu hiệu**: downstream latency P99 tăng vọt, consumer log treo ở "calling DB/API".
 
 > [!WARNING]
-> Đây là lý do consumer lag thường là **canary (chim cảnh báo)** cho thấy một hệ thống khác đang生病. Khi DB chậm, consumer không kịp xử lý → lag tăng → devops nhìn vào Kafka mà original cause nằm ở DB. **Phải monitor lag + downstream latency cùng nhau**.
+> Đây là lý do consumer lag thường là **canary (chim cảnh báo)** cho thấy một hệ thống khác đang có vấn đề. Khi DB chậm, consumer không kịp xử lý → lag tăng → devops nhìn vào Kafka mà original cause nằm ở DB. **Phải monitor lag + downstream latency cùng nhau**.
 
 ---
 
@@ -461,7 +461,7 @@ Fix dài hạn:
 > Đừng vội "thêm consumer". Xem lag per partition → xem có rebalance không → xem downstream latency. Thêm consumer sai chỗ (skew / dependency) chỉ làm tệ thêm.
 >
 > **2. Theo dõi lag + downstream cùng nhau.**
-> Alert lag một mình không đủ — cần alert kèm DB latency, API latency, GC pause. Consumer lag tăng thường là hồi chuông đầu tiên báo "hệ thống khác đang生病".
+> Alert lag một mình không đủ — cần alert kèm DB latency, API latency, GC pause. Consumer lag tăng thường là hồi chuông đầu tiên báo "hệ thống khác đang có vấn đề".
 >
 > **3. Cân `max.poll.records` với `max.poll.interval.ms`.**
 > Quy tắc: `max.poll.records × worst_case_processing_time < max.poll.interval.ms`. Nếu vi phạm → rebalance storm → lag tăng theo cấp số nhân. Giảm `max.poll.records` thường an toàn hơn tăng interval.

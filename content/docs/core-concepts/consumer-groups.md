@@ -13,6 +13,7 @@ description: "Hiểu sâu về Consumer Group trong Kafka: rebalancing protocol,
 - [Rebalancing Protocol](#rebalancing-protocol)
 - [Real World: Scaling Event](#real-world-scaling-event)
 - [AckMode trong Spring Kafka](#ackmode-trong-spring-kafka)
+- [Giảm thiểu Stop-the-world: Cooperative & Static Membership](#giảm-thiểu-stop-the-world-cooperative--static-membership)
 - [Best Practices](#best-practices)
 
 ---
@@ -288,6 +289,92 @@ flowchart TD
 
     D --> G["Dùng CompletableFuture\n+ ack.acknowledge() trong callback"]
 ```
+
+---
+
+## Giảm thiểu Stop-the-world: Cooperative & Static Membership
+
+Như đã nhắc ở phần Rebalancing Protocol, rebalance mặc định (**eager protocol**) khiến **toàn bộ group tạm dừng xử lý** trong lúc phân lại partition. Ở production với deploy thường xuyên hoặc autoscale, điều này gây "đứng" vài chục giây mỗi lần. Kafka cung cấp 2 giải pháp hiện đại để giảm dead time này.
+
+### Vấn đề của Eager Protocol (mặc định)
+
+Eager protocol chọn **an toàn tuyệt đối**: khi có rebalance, **mọi consumer buông tay toàn bộ partition**, chờ phân lại. Ngay cả partition **không đổi chủ** cũng phải dừng:
+
+```
+C3 mới join group (C1 đang giữ P0,P1; C2 đang giữ P2,P3)
+
+EAGER: C1 revoke P0,P1 ─┐
+       C2 revoke P2,P3 ─┤ ← STOP toàn bộ (dead time ~30s)
+       C3 (chưa có gì)  ─┘
+       → chia lại: C1=[P0], C2=[P1,P2], C3=[P3]
+```
+
+### Giải pháp 1: Cooperative Rebalance Protocol
+
+Cooperative protocol **chỉ di chuyển những partition thực sự đổi chủ**, các partition khác **tiếp tục xử lý không gián đoạn**:
+
+```
+COOPERATIVE: C3 mới join
+   C1 vẫn xử lý P0, P1 (không dừng!)
+   C2 vẫn xử lý P2 (không dừng!)
+   → chỉ C2 revoke P3 (partition cần chuyển)
+   → C3 nhận P3
+   → dead time chỉ cho P3, các partition khác liên tục
+```
+
+Cấu hình trong Spring Boot:
+
+```yaml
+spring:
+  kafka:
+    consumer:
+      properties:
+        partition.assignment.strategy: org.apache.kafka.clients.consumer.CooperativeStickyAssignor
+```
+
+| Khía cạnh | Eager (mặc định) | Cooperative |
+|-----------|------------------|-------------|
+| Phạm vi dừng | Toàn bộ partition | Chỉ partition đổi chủ |
+| Dead time khi C3 join | ~30 giây (cả group đứng) | ~1 giây (chỉ P3) |
+| Yêu cầu | Mặc định | **Tất cả consumer dùng cùng strategy** |
+
+> [!IMPORTANT]
+> Cooperative protocol (Kafka 2.4+) giảm dead time cực kỳ hiệu quả. **Đây nên là lựa chọn mặc định cho production mới** — không có lý do gì dùng eager với cluster vừa/lớn.
+
+### Giải pháp 2: Static Membership
+
+Khi consumer restart (deploy, autoscale), nó gửi `LeaveGroup` → trigger rebalance. Static Membership gán cho mỗi consumer một **ID cố định** (`group.instance.id`). Khi consumer rời group, Kafka **không lập tức rebalance** — giữ nguyên partition assignment trong `session.timeout.ms`. Nếu consumer restart lại (cùng ID) trong khoảng đó, nó **claim lại đúng partition cũ** → không rebalance.
+
+```yaml
+spring:
+  kafka:
+    consumer:
+      properties:
+        # Mỗi pod/instance dùng ID cố định (vd từ hostname)
+        group.instance.id: "${HOSTNAME}"
+        # Cho phép consumer restart trong khoảng này mà không trigger rebalance
+        session.timeout.ms: 300000    # 5 phút — đủ cho restart
+```
+
+```
+KHÔNG dùng static membership:
+   C1 restart → LeaveGroup → rebalance ngay → cả group dừng (dead time ~30s)
+
+DÙNG static membership (group.instance.id = "pod-1"):
+   C1 (pod-1) restart → chỉ mất heartbeat, không LeaveGroup
+   Kafka giữ assignment cho pod-1 trong session.timeout.ms
+   C1 (pod-1) up lại → claim lại P0,P1 → KHÔNG REBALANCE (dead time = 0)
+```
+
+> [!TIP]
+> Static membership rất hiệu quả cho **Kubernetes rolling deploy / autoscale**. Mỗi pod dùng `metadata.name` (tên pod cố định) làm `group.instance.id` → restart pod không gây rebalance nữa. Lưu ý: cần đảm bảo ID **duy nhất** trong group.
+
+> [!CAUTION]
+> Trade-off của static membership: khi consumer thực sự chết (không quay lại), partition của nó **không được xử lý** trong suốt `session.timeout.ms`. Phải cân `session.timeout.ms`: đủ dài để restart, đủ ngắn để failover khi crash thật.
+
+### Kết hợp cả hai
+
+Production tốt nhất dùng **cả cooperative + static membership** — giảm dead time khi rebalance (cooperative) + tránh rebalance hoàn toàn khi restart (static). Xem phân tích sâu hơn trong bài [Câu hỏi phỏng vấn: Rebalance stop-the-world](/interview/rebalance-stop-the-world/).
 
 ---
 

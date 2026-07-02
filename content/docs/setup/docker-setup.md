@@ -13,6 +13,7 @@ description: "Hướng dẫn cài đặt Apache Kafka local với Docker Compose
 - [Kafka UI — Giao diện quản lý](#kafka-ui)
 - [Verify cài đặt](#verify-cài-đặt)
 - [Các lệnh CLI cơ bản](#các-lệnh-cli-cơ-bản)
+- [Troubleshooting](#troubleshooting)
 
 ---
 
@@ -223,3 +224,30 @@ Nếu không có lỗi và trả về empty list (hoặc `__consumer_offsets`), 
 | `kafka-consumer-groups --list` | Liệt kê consumer groups |
 | `kafka-consumer-groups --describe --group <name>` | Xem lag của consumer group |
 | `kafka-configs --describe --topic <name>` | Xem config của topic |
+
+---
+
+## Troubleshooting
+
+Các lỗi thường gặp khi chạy Kafka trong Docker.
+
+| Triệu chứng | Nguyên nhân | Fix |
+|-------------|-------------|-----|
+| **`Connection to localhost:9092 refused`** từ client ngoài container | Kafka advertise địa chỉ nội bộ container, client ngoài không resolve được | Set `KAFKA_ADVERTISED_LISTENERS` gồm cả `INTERNAL` (container) và `EXTERNAL` (host), client dùng port host (9092) |
+| **`port is already allocated`** khi `docker compose up` | Port 9092/2181/8080 bị process khác chiếm | `lsof -i :9092` tìm process; đổi port trong compose hoặc kill process |
+| **KRaft broker không start, log `CLUSTER_ID` mismatch** | `KAFKA_PROCESS_ROLES` hoặc `KAFKA_CONTROLLER_QUORUM_VOTERS` sai; hoặc format cluster id chưa đồng bộ giữa các broker | Xóa `/tmp/kraft-combined-logs` rồi chạy lại `kafka-storage format` với cùng `CLUSTER_ID` cho mọi broker |
+| **`Exception in thread "main" org.apache.kafka.common.KafkaException: Unable to create a broker`** | `node.id` thiếu hoặc trùng giữa các broker | Mỗi broker cần `KAFKA_NODE_ID` duy nhất + `controller.quorum.voters` liệt kê đầy đủ |
+| **Topic tạo xong nhưng không có partition/leader** | Broker chưa sẵn sàng khi create topic, hoặc chưa đủ ISR | Chờ broker `RUNNING` (`docker compose logs kafka`); kiểm tra `kafka-topics --describe --topic X` xem `Isr` không rỗng |
+| **Consumer không nhận message sau khi tạo topic mới** | Consumer start trước khi topic tồn tại, và `auto.offset.reset=latest` | Tạo topic trước, hoặc set `auto.offset.reset=earliest`; hoặc `allow.auto.create.topics=true` |
+
+### Cleanup (dọn dẹp sạch sẽ)
+
+```bash
+# Dừng + xóa volume (MẤT DATA)
+docker compose down -v
+
+# Xóa thư mục log KRaft (nếu mount ra host)
+rm -rf /tmp/kraft-combined-logs
+
+# Kiểm tra không còn container Kafka chạy
+docker ps --filter "name=kafka"

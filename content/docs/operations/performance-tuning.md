@@ -5,6 +5,19 @@ description: "Tối ưu Kafka cho Throughput cao và Latency thấp: producer ba
 
 # Performance Tuning
 
+## Mục lục
+
+- [Throughput vs Latency Trade-off](#throughput-vs-latency-trade-off)
+- [Producer Tuning](#producer-tuning)
+- [Consumer Tuning](#consumer-tuning)
+- [Broker Tuning](#broker-tuning)
+- [Compression](#compression)
+- [Topic Design](#topic-design)
+- [JVM Tuning](#jvm-tuning)
+- [Benchmarking](#benchmarking)
+
+---
+
 ## Throughput vs Latency Trade-off
 
 Đây là **fundamental trade-off** trong Kafka. Không thể tối ưu cả hai cùng lúc:

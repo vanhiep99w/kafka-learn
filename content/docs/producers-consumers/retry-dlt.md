@@ -163,7 +163,7 @@ public class KafkaRetryConfig {
             .maxAttempts(4)
             .includeTopic("orders")
             // Không retry validation errors
-            .doNotRetryOnDexceptions(ValidationException.class, JsonParseException.class)
+            .doNotRetryOn(ValidationException.class, JsonParseException.class)
             // Custom DLT processing bean
             .dltHandlerMethod("orderDltConsumer", "handle")
             .create(template);

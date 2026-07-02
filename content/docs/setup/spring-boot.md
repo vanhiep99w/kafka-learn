@@ -14,6 +14,7 @@ description: "Hướng dẫn cài đặt và cấu hình Kafka với Spring Boot
 - [Spring Kafka Components](#spring-kafka-components)
 - [Kiến trúc Producer và Consumer](#kiến-trúc-producer-và-consumer)
 - [Cấu hình Production-ready](#cấu-hình-production-ready)
+- [Troubleshooting](#troubleshooting)
 
 ---
 
@@ -260,6 +261,21 @@ spring:
         heartbeat.interval.ms: 15000
         isolation.level: read_committed  # Nếu dùng transactions
 ```
+
+---
+
+## Troubleshooting
+
+Các lỗi thường gặp khi khởi động Spring Boot Kafka app.
+
+| Triệu chứng | Nguyên nhân | Fix |
+|-------------|-------------|-----|
+| **`SerializationException: Error deserializing`** | Producer serialize = JSON nhưng consumer deserialize = String (hoặc ngược lại), hoặc class model khác version | Đảm bảo `value-serializer`/`value-deserializer` khớp kiểu; nếu JSON, set `spring.json.trusted.packages` đúng package của model |
+| **Consumer không nhận message, log "No group.id found"** | Thiếu `spring.kafka.consumer.group-id` | Thêm `group-id` vào config, hoặc set trong `@KafkaListener(groupId = "...")` |
+| **`TimeoutException: Topic not present` khi start** | Broker chưa reachable, hoặc `bootstrap-servers` sai | Kiểm tra `bootstrap-servers` đúng host:port; nếu broker trong Docker, dùng host port (9092) không phải container port |
+| **`ConfigException: enable.idempotence require acks=all`** | `enable.idempotence=true` nhưng `acks` không phải `all`, hoặc `max.in.flight > 5` | Khi bật idempotence: `acks=all` (bắt buộc) + `max.in.flight.requests.per.connection ≤ 5` |
+| **Rebalance liên tục sau deploy** | `max.poll.interval.ms` < thời gian xử lý batch | Giảm `max.poll.records` hoặc tăng `max.poll.interval.ms`; xem [Consumer Groups — Rebalance](/core-concepts/consumer-groups/#giảm-thiểu-stop-the-world-cooperative--static-membership) |
+| **`ProducerFencedException`** | Hai instance dùng cùng `transactional.id` | Đảm bảo `transaction-id-prefix` + số instance không vượt số slot; instance bị fenced phải restart. Xem [Transactions — Zombie Fencing](/producers-consumers/transactions/#zombie-fencing--epoch--chống-producer-xác-sống) |
 
 <Cards>
   <Card title="Producer API" href="/producers-consumers/producer-api/" description="KafkaTemplate methods, send patterns, callbacks" />

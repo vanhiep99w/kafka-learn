@@ -296,4 +296,5 @@ public class KafkaProducerConfig {
   <Card title="Consumer API" href="/producers-consumers/consumer-api/" description="@KafkaListener, headers, concurrency scaling" />
   <Card title="Transactions" href="/producers-consumers/transactions/" description="Dual write problem, Outbox pattern, error handling" />
   <Card title="Exactly-Once" href="/producers-consumers/exactly-once/" description="EOS và idempotent producer internals" />
+  <Card title="Idempotency" href="/producers-consumers/idempotency/" description="TOCTOU race condition, Stripe idempotency key, dedup patterns" />
 </Cards>

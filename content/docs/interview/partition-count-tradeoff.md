@@ -243,7 +243,7 @@ Topic 200 partition, 1.000 msg/s:
 | 200 | 5 msg/s mỗi P | ~50 ms (chờ linger.ms) | Cao |
 
 > [!NOTE]
-> Hiện tượng này rõ nhất ở **tải thấp**. Khi traffic cao (10.000 msg/s), batch đầy nhanh dù chia nhiều partition. Nhưng ở tải thấp, "càng nhiều partition" lại khiến mỗi message **chậm hơn** — điều ngược lại với直觉.
+> Hiện tượng này rõ nhất ở **tải thấp**. Khi traffic cao (10.000 msg/s), batch đầy nhanh dù chia nhiều partition. Nhưng ở tải thấp, "càng nhiều partition" lại khiến mỗi message **chậm hơn** — điều ngược lại với trực giác.
 
 ---
 
@@ -345,7 +345,7 @@ flowchart TD
     D -->|"Có"| F["⚠️ Tách topic hoặc tăng throughput/partition"]
 ```
 
-**Bước 1 — Ước lượng throughput.** Đây là bước khó nhất. Nếu không có số liệu, hãy ước lượng保守 từ dữ liệu lịch sử hoặc nghiệp vụ (vd: "5.000 order/giờ, mỗi order ~2KB = ~10KB/s" — con số thấp hơn bạn nghĩ).
+**Bước 1 — Ước lượng throughput.** Đây là bước khó nhất. Nếu không có số liệu, hãy ước lượng thận trọng từ dữ liệu lịch sử hoặc nghiệp vụ (vd: "5.000 order/giờ, mỗi order ~2KB = ~10KB/s" — con số thấp hơn bạn nghĩ).
 
 **Bước 2 — Chia cho throughput mỗi partition.** Dùng 10 MB/s làm điểm khởi đầu.
 

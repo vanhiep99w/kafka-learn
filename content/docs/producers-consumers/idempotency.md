@@ -10,6 +10,16 @@ description: "Idempotency là gì, idempotent producer vs idempotent consumer, c
 
 Bài này đào sâu về **idempotency** (tính bất biến khi lặp) — một trong những thuộc tính quan trọng nhất khi xây dựng hệ thống message-driven. Nó bổ sung cho bài [Exactly-Once Semantics](/producers-consumers/exactly-once/): EOS nói về *delivery guarantee*, còn bài này tập trung vào *cách viết logic xử lý* sao cho an toàn khi duplicate xảy ra — kể cả khi có **nhiều thread/instance chạy song song** (phần TOCTOU).
 
+## Mục lục
+
+- [1. Idempotency là gì?](#1-idempotency-là-gì)
+- [2. Hai loại Idempotency trong Kafka](#2-hai-loại-idempotency-trong-kafka)
+- [3. Các Strategy đạt Idempotency](#3-các-strategy-đạt-idempotency)
+- [4. TOCTOU Race Condition — Deep Dive](#4-toctou-race-condition--deep-dive)
+- [5. Case Study: Stripe API xử lý Idempotency thế nào?](#5-case-study-stripe-api-xử-lý-idempotency-thế-nào)
+- [6. Idempotency trong Spring Kafka — lưu ý thực chiến](#6-idempotency-trong-spring-kafka--lưu-ý-thực-chiến)
+- [7. Tổng kết](#7-tổng-kết)
+
 ---
 
 ## 1. Idempotency là gì?

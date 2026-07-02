@@ -14,6 +14,7 @@ description: "Deep dive vào Kafka Transactions: Dual Write Problem, DB+Kafka tr
 - [Solution 2: Transactional Outbox Pattern](#solution-2-transactional-outbox-pattern)
 - [Implementation: Outbox Pattern trong Spring Boot](#implementation-outbox-pattern-trong-spring-boot)
 - [Consume-Transform-Produce (Kafka → Kafka)](#consume-transform-produce-kafka--kafka)
+- [Zombie Fencing & Epoch — chống producer "xác sống"](#zombie-fencing--epoch--chống-producer-xác-sống)
 - [So sánh các Approaches](#so-sánh-các-approaches)
 
 ---
@@ -463,6 +464,76 @@ public class OrderEnrichmentService {
     }
 }
 ```
+
+---
+
+## Zombie Fencing & Epoch — chống producer "xác sống"
+
+Khi dùng transactional producer, có một vấn đề tinh tế nhưng nguy hiểm: **producer "xác sống" (zombie)**. Đây là kịch bản:
+
+```
+Producer P1 bắt đầu transaction T1 (transactional.id = "tx-order")
+   │
+   ▼
+P1 bị network glitch,Coordinator tưởng P1 chết
+   │
+   ▼
+Coordinator thu hồi transactional.id "tx-order"
+   → khởi tạo lại cho Producer P2 (instance mới)
+   │
+   ▼
+P2 bắt đầu transaction T2 với cùng transactional.id
+   │
+   ▼
+Đột nhiên P1 "sống lại" (network khôi phục)
+   → P1 cố commit T1 (transaction CŨ)
+   → Nếu không có bảo vệ, T1 có thể đè lên T2 → data hỏng!
+```
+
+### Cơ chế Epoch Fencing
+
+Kafka giải quyết bằng **epoch** — một số tăng dần mỗi khi `transactional.id` được khởi tạo lại. Broker chỉ chấp nhận request từ producer có **epoch cao nhất**. Request từ epoch cũ hơn bị **từ chối (fenced)**:
+
+```
+transactional.id = "tx-order"
+
+  Epoch 0: P1 init → broker ghi "tx-order" → epoch 0
+  P1 gửi message với epoch 0 → broker chấp nhận ✅
+
+  P1 tưởng chết → P2 init → broker bump epoch lên 1
+  P2 gửi message với epoch 1 → broker chấp nhận ✅
+
+  P1 "sống lại", cố commit với epoch 0
+  → broker: "epoch 0 < epoch 1 hiện tại" → TỪ CHỐI (fenced) ❌
+  → P1 nhận ProducerFencedException → phải tự close
+```
+
+### Cấu hình
+
+Cơ chế fencing **tự động bật** khi bạn set `transactional.id` (hoặc `transaction-id-prefix` trong Spring). Không cần config thêm:
+
+```yaml
+spring:
+  kafka:
+    producer:
+      transaction-id-prefix: tx-order-service   # bật fencing tự động
+      acks: all                                  # bắt buộc khi dùng transaction
+      # enable.idempotence tự được bật khi có transactional.id
+```
+
+> [!IMPORTANT]
+> **`transactional.id` phải ổn định qua các lần restart** — nó là danh tính của producer. Nếu dùng prefix như `tx-order-service-`, Spring sẽ tự thêm suffix để mỗi instance có ID duy nhất nhưng ổn định qua restart (vd `tx-order-service-0`, `tx-order-service-1`). Đừng dùng random/UUID làm `transactional.id` — sẽ mất tính fencing.
+
+### Hậu quả nếu không hiểu fencing
+
+| Tình huống | Không có fencing | Có fencing |
+|------------|------------------|------------|
+| Producer zombie cố commit transaction cũ | **Có thể commit** → đè lên transaction mới → data hỏng | **Bị từ chối** → `ProducerFencedException` → zombie phải chết |
+| Producer restart bình thường | OK | OK (epoch bump, producer tiếp tục) |
+| Hai instance dùng cùng `transactional.id` | Conflict lặng lẽ | Một instance bị fenced → phải dùng ID khác |
+
+> [!CAUTION]
+> Nếu thấy `ProducerFencedException` trong production — nghĩa là có hai instance dùng cùng `transactional.id`. Đây thường do deploy nhiều hơn số `transaction-id-prefix` slot, hoặc instance cũ chưa chết hẳn. Instance bị fenced **phải close và restart**, không nên retry.
 
 ---
 

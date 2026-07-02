@@ -5,6 +5,17 @@ description: "Idempotent producer (PID + Sequence Number), consumer idempotency 
 
 # Exactly-Once Semantics (EOS)
 
+## Mục lục
+
+- [Ba Delivery Guarantees](#ba-delivery-guarantees)
+- [Part 1: Producer Idempotency (Built-in)](#part-1-producer-idempotency-built-in)
+- [Part 2: Consumer Idempotency (Application Responsibility)](#part-2-consumer-idempotency-application-responsibility)
+- [EOS: Khi nào dùng được?](#eos-khi-nào-dùng-được)
+- [Strategy Decision Matrix](#strategy-decision-matrix)
+- [Checklist](#checklist)
+
+---
+
 ## Ba Delivery Guarantees
 
 | Semantic | Cách xảy ra | Trade-off | Dùng khi |
@@ -104,6 +115,9 @@ spring:
 ---
 
 ## Part 2: Consumer Idempotency (Application Responsibility)
+
+> [!NOTE]
+> Phần này trình bày 3 strategy cốt lõi (Natural Idempotency, Dedup Table, Idempotency Key) ở mức tổng quan. Để hiểu sâu về race condition TOCTOU, cơ chế Stripe xử lý 409 Conflict, và checklist idempotency đầy đủ, xem bài riêng: [Idempotency & TOCTOU Race Condition](/producers-consumers/idempotency/).
 
 ### Tại sao Consumer Duplicates Xảy ra
 

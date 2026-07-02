@@ -35,7 +35,7 @@ Câu hỏi này kiểm tra một điều: bạn có hiểu rebalance dùng **eag
 
 > Rebalance mặc định dùng **eager protocol**: mọi consumer **tạm dừng xử lý**, **commit offset**, **thu hồi toàn bộ partition**, rồi chờ leader phân lại — nên cả group "đứng" trong khi đó. Rebalance xảy ra khi: consumer join/leave/crash, subscription thay đổi. Nguyên nhân phổ biến gây rebalance liên tục: **processing time > `max.poll.interval.ms`** (Kafka tưởng consumer chết), **GC pause dài**, **deploy/autoscale**.
 >
-> Giảm thiểu bằng: (1) **Static Membership** (`group.instance.id`) — consumer rời không lập tức trigger rebalance, partition được giữ `session.timeout.ms`; (2) **Cooperative protocol** — chỉ di chuyển partition cần đổi, các partition khác **không dừng**; (3) cân `max.poll.records` × processing time < `max.poll.interval.ms` để không bị踢 do "chậm poll".
+> Giảm thiểu bằng: (1) **Static Membership** (`group.instance.id`) — consumer rời không lập tức trigger rebalance, partition được giữ `session.timeout.ms`; (2) **Cooperative protocol** — chỉ di chuyển partition cần đổi, các partition khác **không dừng**; (3) cân `max.poll.records` × processing time < `max.poll.interval.ms` để không bị đẩy ra do "chậm poll".
 
 ---
 
@@ -411,7 +411,7 @@ Fix dài hạn:
 > Có. Khi consumer rời group, partition của nó **không được gán cho ai** trong suốt `session.timeout.ms` → nếu consumer thực sự chết (không quay lại), partition đó **không được xử lý** cho tới khi timeout. Phải cân `session.timeout.ms`: đủ dài để restart, đủ ngắn để failover khi crash thật.
 
 > **"Rebalance có gây duplicate message không?"**
-> Có thể. Khi consumer bị踢 giữa chừng, nó đã xử lý một số message nhưng **chưa kịp commit** → consumer mới nhận partition đó sẽ **reprocess** từ committed offset cũ. Đây là lý do consumer cần **idempotent**. Xem [Idempotency](/producers-consumers/idempotency/).
+> Có thể. Khi consumer bị đẩy ra giữa chừng, nó đã xử lý một số message nhưng **chưa kịp commit** → consumer mới nhận partition đó sẽ **reprocess** từ committed offset cũ. Đây là lý do consumer cần **idempotent**. Xem [Idempotency](/producers-consumers/idempotency/).
 
 > **"Dùng nhiều consumer group khác nhau có giảm rebalance không?"**
 > Có một phần: rebalance trong group A không ảnh hưởng group B. Nhưng mỗi group vẫn có rebalance riêng. Tách group phù hợp cho **các use case độc lập** (order-service vs analytics), không phải để "giảm rebalance".

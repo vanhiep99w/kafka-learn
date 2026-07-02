@@ -189,9 +189,14 @@ listener.name.sasl_ssl.oauthbearer.sasl.server.callback.handler.class=\
 
 ```properties
 # server.properties
-authorizer.class.name=kafka.security.authorizer.AclAuthorizer
+authorizer.class.name=org.apache.kafka.metadata.authorizer.StandardAuthorizer
 super.users=User:admin;User:kafka-broker
 ```
+
+> [!WARNING]
+> Tên class phụ thuộc kiến trúc Kafka:
+> - **KRaft mode** (Kafka 3.x+ opt-in, **4.0+ mặc định và duy nhất**): dùng `org.apache.kafka.metadata.authorizer.StandardAuthorizer`.
+> - **ZooKeeper mode** (cũ, đã bị loại bỏ từ Kafka 4.0): từng dùng `kafka.security.authorizer.AclAuthorizer` (deprecated từ Kafka 2.x) và sau đó `kafka.security.authorizer.AclAuthorizer` qua `kafka.security.authorizer.AclAuthorizer`. Nếu bạn đang dùng Kafka mới (KRaft) mà gặp class cũ →ClassNotFoundException. Xem thêm về KRaft trong bài [Brokers & Cluster](/core-concepts/brokers-cluster/#controller--kraft-mode).
 
 ### Quản lý ACLs via CLI
 

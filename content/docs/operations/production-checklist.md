@@ -110,7 +110,7 @@ spring:
 [ ] @DltHandler implement cho poison pill messages
 [ ] Retry topics configured cho transient errors
 [ ] Processing time < max.poll.interval.ms
-[ ] Log足够 context khi xử lý fail (message, offset, exception)
+[ ] Log đủ context khi xử lý fail (message, offset, exception)
 ```
 
 ---

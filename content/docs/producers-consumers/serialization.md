@@ -51,6 +51,23 @@ Kafka truyền dữ liệu dưới dạng **bytes**. Java objects phải đượ
 | **Protobuf** | `KafkaProtobufSerializer` | `KafkaProtobufDeserializer` | Rất nhỏ | Rất nhanh | ⚠️ Khó | ✅ .proto file | High-throughput, performance-critical |
 | **Bytes** | `ByteArraySerializer` | `ByteArrayDeserializer` | Tùy | Tùy | ❌ Khó | ❌ Manual | Custom binary, passthrough |
 
+### Định lượng kích thước — cùng một object `OrderEvent`
+
+Giả sử serialize cùng một object `OrderEvent {orderId: "ord-123", customerId: "cus-456", amount: 150000, currency: "VND", status: "PAID"}`:
+
+| Format | Bytes (xấp xỉ) | So với JSON | Ghi chú |
+|--------|:-:|:-:|---------|
+| JSON (text) | **~180 B** | 1× (baseline) | Tên field lặp lại từng message, dấu `"`/`{}`/`:` |
+| Avro (binary, schema tách rời) | **~55 B** | ~0.3× | Không chứa tên field (schema lưu riêng ở Schema Registry) |
+| Protobuf (binary, .proto tách rời) | **~45 B** | ~0.25× | Field tag dạng số, varint encoding cho số |
+| String (raw text) | **~180 B** | ~1× | Tương đương JSON nếu là JSON string |
+
+> [!TIP]
+> Khác biệt rõ nhất ở **traffic cao**. Một topic 10 triệu msg/ngày: JSON tốn ~1.8 GB/ngày, Avro chỉ ~550 MB, Protobuf ~450 MB — tiết kiệm ~3–4× băng thông mạng + dung lượng Kafka + chi phí Cloudflare/AWS. Nhưng đổi lại: cần Schema Registry (Avro) hoặc chia sẻ `.proto` (Protobuf), khó debug hơn vì message binary không đọc được trực tiếp.
+
+> [!NOTE]
+> Con số trên chỉ là ví dụ minh họa cho một object nhỏ. Thực tế độ chênh lệch phụ thuộc cấu trúc data (nhiều field string → Avro/Protobuf tiết kiệm hơn rõ rệt; nhiều số nguyên nhỏ → Protobuf varint lợi hơn). Luôn **đo với data thật** trước khi quyết định.
+
 ---
 
 ## String Serialization
