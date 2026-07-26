@@ -1,6 +1,7 @@
 @import 'fumadocs-ui/style.css';
 
 :root {
+  --fd-layout-width: 100vw;
   --fd-font: var(--font-sans), system-ui, sans-serif;
   /*
     Prefer OS monospace fonts with reliable box-drawing glyphs for diagrams.
@@ -27,9 +28,11 @@ code, pre, kbd, samp {
   font-variant-ligatures: none;
 }
 
-/* Wider content area */
-#nd-page article {
+/* Use the full viewport and keep the document close to both sidebars. */
+#nd-page {
   max-width: none;
+  margin-inline: 0;
+  padding-inline: 1rem;
 }
 
 /* Vietnamese text readability */
