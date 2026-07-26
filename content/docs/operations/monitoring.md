@@ -177,7 +177,7 @@ kafka-lag-exporter:
     - ./lag-exporter.conf:/opt/docker/conf/application.conf
 ```
 
-```hocon
+```properties
 # lag-exporter.conf
 kafka-lag-exporter {
   kafka-client-timeout = 10 seconds

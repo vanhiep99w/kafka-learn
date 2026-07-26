@@ -1,11 +1,6 @@
 import { createMDX } from 'fumadocs-mdx/next';
-import remarkGithubAdmonitions from 'remark-github-admonitions-to-directives';
 
-const withMDX = createMDX({
-  mdxOptions: {
-    remarkPlugins: [remarkGithubAdmonitions],
-  },
-});
+const withMDX = createMDX();
 
 /** @type {import('next').NextConfig} */
 const config = {

@@ -9,6 +9,9 @@ out/
 dist/
 build/
 
+# Generated Fumadocs content
+.source/
+
 # Environment variables
 .env
 .env.local
