@@ -2,6 +2,7 @@
   "title": "Câu hỏi phỏng vấn",
   "pages": [
     "partition-count-tradeoff",
+    "hot-partition-strict-ordering",
     "consumer-lag-growing",
     "rebalance-stop-the-world",
     "kafka-retention-not-queryable"
