@@ -24,24 +24,22 @@ description: "Hiểu sâu về Consumer Group trong Kafka: rebalancing protocol,
 
 Mỗi consumer group được định danh bằng một `group.id` duy nhất. Kafka theo dõi offset đã xử lý của **từng group**, không phải từng consumer instance.
 
-```mermaid
-graph TB
-    subgraph "Topic: orders (4 Partitions)"
-        P0[Partition 0]
-        P1[Partition 1]
-        P2[Partition 2]
-        P3[Partition 3]
-    end
-
-    subgraph "Consumer Group: order-service"
-        C1[Consumer 1]
-        C2[Consumer 2]
-    end
-
-    P0 --> C1
-    P1 --> C1
-    P2 --> C2
-    P3 --> C2
+```d2 title="Tổng quan"
+direction: down
+g1: "Topic: orders (4 Partitions)" {
+  P0: "Partition 0"
+  P1: "Partition 1"
+  P2: "Partition 2"
+  P3: "Partition 3"
+}
+g2: "Consumer Group: order-service" {
+  C1: "Consumer 1"
+  C2: "Consumer 2"
+}
+g1.P0 -> g2.C1
+g1.P1 -> g2.C1
+g1.P2 -> g2.C2
+g1.P3 -> g2.C2
 ```
 
 ---
@@ -63,12 +61,45 @@ graph TB
 
 Nếu bạn có **10 Partitions** và start **15 Consumers**, **5 consumer sẽ không làm gì** — họ ở trạng thái idle chờ rebalance.
 
-```
-Partitions:  [P0] [P1] [P2] [P3] [P4] [P5] [P6] [P7] [P8] [P9]
-                ↓    ↓    ↓    ↓    ↓    ↓    ↓    ↓    ↓    ↓
-Consumers:  [ C1][ C2][ C3][ C4][ C5][ C6][ C7][ C8][ C9][C10][C11][C12][C13][C14][C15]
-                                                                    ↑    ↑    ↑    ↑    ↑
-                                                               IDLE (lãng phí tài nguyên)
+```d2 title="10 partition chỉ có tối đa 10 consumer active"
+direction: down
+topic: "Topic: orders" {
+  p0: "P0"
+  p1: "P1"
+  p2: "P2"
+  p3: "P3"
+  p4: "P4"
+  p5: "P5"
+  p6: "P6"
+  p7: "P7"
+  p8: "P8"
+  p9: "P9"
+}
+c1: "Consumer 1"
+topic.p0 -> c1
+c2: "Consumer 2"
+topic.p1 -> c2
+c3: "Consumer 3"
+topic.p2 -> c3
+c4: "Consumer 4"
+topic.p3 -> c4
+c5: "Consumer 5"
+topic.p4 -> c5
+c6: "Consumer 6"
+topic.p5 -> c6
+c7: "Consumer 7"
+topic.p6 -> c7
+c8: "Consumer 8"
+topic.p7 -> c8
+c9: "Consumer 9"
+topic.p8 -> c9
+c10: "Consumer 10"
+topic.p9 -> c10
+c11: "Consumer 11 (IDLE)"
+c12: "Consumer 12 (IDLE)"
+c13: "Consumer 13 (IDLE)"
+c14: "Consumer 14 (IDLE)"
+c15: "Consumer 15 (IDLE)"
 ```
 
 ---
@@ -77,38 +108,32 @@ Consumers:  [ C1][ C2][ C3][ C4][ C5][ C6][ C7][ C8][ C9][C10][C11][C12][C13][C1
 
 Đây là cách Kafka hỗ trợ **Pub/Sub pattern**: nhiều service độc lập nhau cùng nhận một message.
 
-```mermaid
-graph TB
-    subgraph "Topic: orders (3 Partitions)"
-        P0["Partition 0\nMessages 0-100"]
-        P1["Partition 1\nMessages 0-100"]
-        P2["Partition 2\nMessages 0-100"]
-    end
-
-    subgraph "Group A: order-service"
-        CA1["Consumer A1"]
-        CA2["Consumer A2"]
-    end
-
-    subgraph "Group B: analytics-service"
-        CB1["Consumer B1"]
-    end
-
-    subgraph "Group C: notification-service"
-        CC1["Consumer C1"]
-    end
-
-    P0 --> CA1
-    P1 --> CA1
-    P2 --> CA2
-
-    P0 --> CB1
-    P1 --> CB1
-    P2 --> CB1
-
-    P0 --> CC1
-    P1 --> CC1
-    P2 --> CC1
+```d2 title="Multiple Consumer Groups — Pub/Sub"
+direction: down
+g1: "Topic: orders (3 Partitions)" {
+  P0: "Partition 0\nMessages 0-100"
+  P1: "Partition 1\nMessages 0-100"
+  P2: "Partition 2\nMessages 0-100"
+}
+g2: "Group A: order-service" {
+  CA1: "Consumer A1"
+  CA2: "Consumer A2"
+}
+g3: "Group B: analytics-service" {
+  CB1: "Consumer B1"
+}
+g4: "Group C: notification-service" {
+  CC1: "Consumer C1"
+}
+g1.P0 -> g2.CA1
+g1.P1 -> g2.CA1
+g1.P2 -> g2.CA2
+g1.P0 -> g3.CB1
+g1.P1 -> g3.CB1
+g1.P2 -> g3.CB1
+g1.P0 -> g4.CC1
+g1.P1 -> g4.CC1
+g1.P2 -> g4.CC1
 ```
 
 **Điểm quan trọng**: Mỗi group theo dõi offset **độc lập**. Group A ở offset 85, Group B ở offset 45 — hai group tiến độc lập, không ảnh hưởng nhau.
@@ -133,23 +158,20 @@ graph TB
 
 ### Giao thức Rebalancing (3 bước)
 
-```mermaid
-sequenceDiagram
-    participant C1 as Consumer 1
-    participant C2 as Consumer 2
-    participant Coord as Broker (Coordinator)
-
-    Note over C1, C2: C2 mới start
-    C2->>Coord: JoinGroup (tôi muốn gia nhập)
-    C1->>Coord: JoinGroup (triggered bởi rebalance)
-    Coord-->>C1: Bạn là Leader! Members: [C1, C2]
-    Coord-->>C2: Đợi assignment...
-
-    Note over C1: C1 tính toán partition assignments
-
-    C1->>Coord: SyncGroup (Assignments: C1=[P0,P1], C2=[P2,P3])
-    Coord-->>C1: Ack
-    Coord-->>C2: Assignment của bạn: [P2, P3]
+```d2 title="Giao thức Rebalancing (3 bước)"
+shape: sequence_diagram
+C1: "Consumer 1"
+C2: "Consumer 2"
+Coord: "Broker (Coordinator)"
+C1.note1: "C1 / C2: C2 mới start"
+C2 -> Coord: "JoinGroup (tôi muốn gia nhập)"
+C1 -> Coord: "JoinGroup (triggered bởi rebalance)"
+Coord -> C1: "Bạn là Leader! Members: [C1, C2]" { style.stroke-dash: 4 }
+Coord -> C2: "Đợi assignment..." { style.stroke-dash: 4 }
+C1.note2: "C1 tính toán partition assignments"
+C1 -> Coord: "SyncGroup (Assignments: C1=[P0,P1], C2=[P2,P3])"
+Coord -> C1: "Ack" { style.stroke-dash: 4 }
+Coord -> C2: "Assignment của bạn: [P2, P3]" { style.stroke-dash: 4 }
 ```
 
 #### Bước 1: FindCoordinator
@@ -180,32 +202,53 @@ Leader consumer **tính toán** partition assignment (ai nhận partition nào),
 ### Kịch bản: Topic `orders` với 4 Partitions
 
 **Bước 1: Ban đầu — 1 Consumer**
-```
-[P0] [P1] [P2] [P3]
-  └────┴────┴────┘
-        ↓
-      [C1]  ← Xử lý tất cả 4 partitions
+```d2 title="Một consumer xử lý bốn partition"
+direction: down
+topic: "Topic: orders" {
+  p0: "P0"
+  p1: "P1"
+  p2: "P2"
+  p3: "P3"
+}
+c1: "Consumer 1"
+topic.p0 -> c1
+topic.p1 -> c1
+topic.p2 -> c1
+topic.p3 -> c1
 ```
 
 **Bước 2: Scale up — Start thêm C2**
-```
-Rebalance trigger!
-
-[P0] [P1] [P2] [P3]
-  └────┘    └────┘
-    ↓          ↓
-  [C1]       [C2]   ← Load được chia đôi
+```d2 title="Consumer mới gia nhập — chia lại assignment"
+direction: down
+topic: "Topic: orders" {
+  p0: "P0"
+  p1: "P1"
+  p2: "P2"
+  p3: "P3"
+}
+c1: "Consumer 1"
+topic.p0 -> c1
+topic.p1 -> c1
+c2: "Consumer 2"
+topic.p2 -> c2
+topic.p3 -> c2
 ```
 
 **Bước 3: C2 crash — Mất heartbeat**
-```
-Coordinator chờ session.timeout.ms (mặc định 45s)
-→ Rebalance trigger!
-
-[P0] [P1] [P2] [P3]
-  └────┴────┴────┘
-        ↓
-      [C1]  ← C1 lại nhận tất cả (từ committed offset của C2)
+```d2 title="Consumer rời đi — resume từ committed offset"
+direction: down
+topic: "Topic: orders" {
+  p0: "P0"
+  p1: "P1"
+  p2: "P2"
+  p3: "P3"
+}
+c1: "Consumer 1"
+topic.p0 -> c1
+topic.p1 -> c1
+topic.p2 -> c1
+topic.p3 -> c1
+note: "Coordinator chờ session.timeout.ms (ví dụ 45s)\nRebalance; C1 nhận lại P2, P3 từ committed offset"
 ```
 
 > [!TIP]
@@ -277,17 +320,21 @@ public void listen(String message, Acknowledgment ack) {
 
 ### Khi nào dùng MANUAL?
 
-```mermaid
-flowchart TD
-    A[Chọn AckMode] --> B{Xử lý có async không?}
-
-    B -->|Không| C{Cần exactly-once?}
-    B -->|Có - async DB/API| D["MANUAL\nAck sau khi async complete"]
-
-    C -->|Không| E["BATCH (mặc định)\nThroughput cao, đủ an toàn"]
-    C -->|Có| F["RECORD\nAck từng message"]
-
-    D --> G["Dùng CompletableFuture\n+ ack.acknowledge() trong callback"]
+```d2 title="Khi nào dùng MANUAL?"
+direction: down
+A: "Chọn AckMode"
+B: "Xử lý có async không?" { shape: diamond }
+C: "Cần exactly-once?" { shape: diamond }
+D: "MANUAL\nAck sau khi async complete"
+E: "BATCH (mặc định)\nThroughput cao, đủ an toàn"
+F: "RECORD\nAck từng message"
+G: "Dùng CompletableFuture\n+ ack.acknowledge() trong callback"
+A -> B
+B -> C: "Không"
+B -> D: "Có - async DB/API"
+C -> E: "Không"
+C -> F: "Có"
+D -> G
 ```
 
 ---
@@ -300,26 +347,30 @@ Như đã nhắc ở phần Rebalancing Protocol, rebalance mặc định (**eag
 
 Eager protocol chọn **an toàn tuyệt đối**: khi có rebalance, **mọi consumer buông tay toàn bộ partition**, chờ phân lại. Ngay cả partition **không đổi chủ** cũng phải dừng:
 
-```
-C3 mới join group (C1 đang giữ P0,P1; C2 đang giữ P2,P3)
-
-EAGER: C1 revoke P0,P1 ─┐
-       C2 revoke P2,P3 ─┤ ← STOP toàn bộ (dead time ~30s)
-       C3 (chưa có gì)  ─┘
-       → chia lại: C1=[P0], C2=[P1,P2], C3=[P3]
+```d2 title="Eager rebalance"
+direction: right
+before: "C3 mới join\nC1 giữ P0,P1; C2 giữ P2,P3"
+stop: "Eager — revoke toàn bộ" {
+  c1: C1 revoke P0,P1
+  c2: C2 revoke P2,P3
+  c3: C3 chưa có partition
+}
+wait: "STOP toàn group\nVí dụ dead time ~30s"
+after: "Assignment mới\nC1=[P0], C2=[P1,P2], C3=[P3]"
+before -> stop -> wait -> after
 ```
 
 ### Giải pháp 1: Cooperative Rebalance Protocol
 
 Cooperative protocol **chỉ di chuyển những partition thực sự đổi chủ**, các partition khác **tiếp tục xử lý không gián đoạn**:
 
-```
-COOPERATIVE: C3 mới join
-   C1 vẫn xử lý P0, P1 (không dừng!)
-   C2 vẫn xử lý P2 (không dừng!)
-   → chỉ C2 revoke P3 (partition cần chuyển)
-   → C3 nhận P3
-   → dead time chỉ cho P3, các partition khác liên tục
+```d2 title="Cooperative rebalance"
+direction: right
+join: C3 mới join
+running: "Không dừng" {c1: C1 giữ P0,P1; c2: C2 giữ P2}
+move: "Chỉ P3 tạm dừng" {c2: C2 revoke P3; c3: C3 nhận P3; c2 -> c3: Di chuyển P3}
+join -> running
+join -> move
 ```
 
 Cấu hình trong Spring Boot:
@@ -356,14 +407,20 @@ spring:
         session.timeout.ms: 300000    # 5 phút — đủ cho restart
 ```
 
-```
-KHÔNG dùng static membership:
-   C1 restart → LeaveGroup → rebalance ngay → cả group dừng (dead time ~30s)
-
-DÙNG static membership (group.instance.id = "pod-1"):
-   C1 (pod-1) restart → chỉ mất heartbeat, không LeaveGroup
-   Kafka giữ assignment cho pod-1 trong session.timeout.ms
-   C1 (pod-1) up lại → claim lại P0,P1 → KHÔNG REBALANCE (dead time = 0)
+```d2 title="Static membership khi restart"
+direction: right
+dynamic: "Không static membership" {
+  restart: C1 restart
+  leave: LeaveGroup
+  rebalance: "Rebalance ngay\nCả group dừng, ví dụ ~30s"
+  restart -> leave -> rebalance
+}
+static: "group.instance.id = pod-1" {
+  restart: "C1 restart\nKhông gửi LeaveGroup, mất heartbeat"
+  retain: "Kafka giữ assignment\nTrong session.timeout.ms"
+  resume: "C1 trở lại kịp timeout\nNhận lại P0,P1 — không rebalance"
+  restart -> retain -> resume
+}
 ```
 
 > [!TIP]

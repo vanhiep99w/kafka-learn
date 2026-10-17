@@ -200,23 +200,33 @@ Consumer chỉ cần field names match — không cần cùng class type.
 
 ## Kiến trúc Producer và Consumer
 
-```mermaid
-flowchart LR
-    subgraph "Producer Side"
-        App1["Your App\n(OrderService)"] --> KT["KafkaTemplate&lt;K,V&gt;\n.send(topic, key, value)"]
-        KT --> PF["ProducerFactory\n(ThreadLocal caching)"]
-        PF --> Ser["Serialization\nKey + Value → Bytes"]
-        Ser --> Buf["Producer Buffer\n(batch.size, linger.ms)"]
-        Buf --> Broker["Kafka Broker\n(Leader Partition)"]
-    end
-
-    subgraph "Consumer Side"
-        Broker --> MLC["MessageListenerContainer\n(Poll Loop)"]
-        MLC --> CF["ConsumerFactory"]
-        CF --> Deser["Deserialization\nBytes → Key + Value"]
-        Deser --> KL["@KafkaListener Method\nhandleOrder(OrderEvent)"]
-        KL --> App2["Your App\n(OrderConsumer)"]
-    end
+```d2 title="Kiến trúc Producer và Consumer"
+direction: right
+g1: "Producer Side" {
+  App1: "Your App\n(OrderService)"
+  KT: "KafkaTemplate<K,V>\n.send(topic, key, value)"
+  PF: "ProducerFactory\n(ThreadLocal caching)"
+  Ser: "Serialization\nKey + Value → Bytes"
+  Buf: "Producer Buffer\n(batch.size, linger.ms)"
+  Broker: "Kafka Broker\n(Leader Partition)"
+}
+g2: "Consumer Side" {
+  MLC: "MessageListenerContainer\n(Poll Loop)"
+  CF: "ConsumerFactory"
+  Deser: "Deserialization\nBytes → Key + Value"
+  KL: "@KafkaListener Method\nhandleOrder(OrderEvent)"
+  App2: "Your App\n(OrderConsumer)"
+}
+g1.App1 -> g1.KT
+g1.KT -> g1.PF
+g1.PF -> g1.Ser
+g1.Ser -> g1.Buf
+g1.Buf -> g1.Broker
+g1.Broker -> g2.MLC
+g2.MLC -> g2.CF
+g2.CF -> g2.Deser
+g2.Deser -> g2.KL
+g2.KL -> g2.App2
 ```
 
 ---

@@ -22,22 +22,20 @@ description: "Cách Kafka Consumer hoạt động: poll loop, consumer groups, p
 
 **Consumer** là ứng dụng **đọc (subscribe) messages** từ Kafka topic. Không giống message queue truyền thống, Kafka Consumer **tự kiểm soát** việc đọc — quyết định đọc từ offset nào, tốc độ nào.
 
-```
-Kafka Topic: orders (4 Partitions)
-┌──────┐ ┌──────┐ ┌──────┐ ┌──────┐
-│  P0  │ │  P1  │ │  P2  │ │  P3  │
-│[0..n]│ │[0..n]│ │[0..n]│ │[0..n]│
-└──┬───┘ └──┬───┘ └──┬───┘ └──┬───┘
-   │        │        │        │
-   └────────┴────────┴────────┘
-                    │
-                    ▼ poll()
-          ┌─────────────────┐
-          │    Consumer     │
-          │  (Your App)     │
-          │                 │
-          │ process(record) │
-          └─────────────────┘
+```d2 title="Consumer poll và xử lý record"
+direction: down
+topic: "Topic: orders" {
+  p0: "P0"
+  p1: "P1"
+  p2: "P2"
+  p3: "P3"
+}
+c1: "Consumer 1"
+topic.p0 -> c1
+topic.p1 -> c1
+topic.p2 -> c1
+topic.p3 -> c1
+c1.label: "Consumer — Your App\npoll() → process(record)"
 ```
 
 ---
@@ -46,18 +44,21 @@ Kafka Topic: orders (4 Partitions)
 
 Kafka dùng **Pull model** (Consumer tự poll), không phải Push model (Broker push data):
 
-```mermaid
-flowchart LR
-    subgraph "Pull Model (Kafka)"
-        C1["Consumer\n(Your App)"] -->|"poll(timeout)"| B1["Kafka Broker"]
-        B1 -->|"records batch"| C1
-        Note1["Consumer kiểm soát pace\nBackpressure tự nhiên"]
-    end
-
-    subgraph "Push Model (Truyền thống)"
-        B2["Message Broker"] -->|"push when available"| C2["Consumer"]
-        Note2["Broker quyết định tốc độ\nConsumer có thể bị overwhelm"]
-    end
+```d2 title="Pull Model — Consumer tự lấy data"
+direction: right
+g1: "Pull Model (Kafka)" {
+  C1: "Consumer\n(Your App)"
+  B1: "Kafka Broker"
+  Note1: "Consumer kiểm soát pace\nBackpressure tự nhiên"
+}
+g2: "Push Model (Truyền thống)" {
+  B2: "Message Broker"
+  C2: "Consumer"
+  Note2: "Broker quyết định tốc độ\nConsumer có thể bị overwhelm"
+}
+g1.C1 -> g1.B1: "poll(timeout)"
+g1.B1 -> g1.C1: "records batch"
+g2.B2 -> g2.C2: "push when available"
 ```
 
 **Lợi ích của Pull model:**
@@ -72,16 +73,25 @@ flowchart LR
 
 **Consumer Group** = nhóm consumers cùng chia sẻ load của một topic.
 
-```
-Topic: orders (6 Partitions)
-┌────┐ ┌────┐ ┌────┐ ┌────┐ ┌────┐ ┌────┐
-│ P0 │ │ P1 │ │ P2 │ │ P3 │ │ P4 │ │ P5 │
-└─┬──┘ └─┬──┘ └─┬──┘ └─┬──┘ └─┬──┘ └─┬──┘
-  │      │      │      │      │      │
-  └──────┴──────┼──────┴──────┴──────┘
-                │  Consumer Group: "order-service"
-         ┌──────┴──────┐
-     [C1: P0,P1]   [C2: P2,P3]   [C3: P4,P5]
+```d2 title="Assignment của order-service với 6 partition"
+direction: down
+topic: "Topic: orders" {
+  p0: "P0"
+  p1: "P1"
+  p2: "P2"
+  p3: "P3"
+  p4: "P4"
+  p5: "P5"
+}
+c1: "Consumer 1"
+topic.p0 -> c1
+topic.p1 -> c1
+c2: "Consumer 2"
+topic.p2 -> c2
+topic.p3 -> c2
+c3: "Consumer 3"
+topic.p4 -> c3
+topic.p5 -> c3
 ```
 
 **Rule bất biến**: Trong một consumer group, **một partition chỉ được xử lý bởi đúng một consumer** tại một thời điểm → đảm bảo ordering per partition.
@@ -90,15 +100,17 @@ Topic: orders (6 Partitions)
 
 ## Partition Assignment Rules
 
-```mermaid
-flowchart TD
-    A["Topic: N Partitions\nGroup: M Consumers"]
-
-    A --> B{So sánh N vs M}
-
-    B -->|"N > M\n(more partitions)"| C["Một số consumers\nxử lý nhiều hơn 1 partition\n✅ Tất cả partitions được xử lý"]
-    B -->|"N = M\n(equal)"| D["Mỗi consumer xử lý\nđúng 1 partition\n✅ Optimal"]
-    B -->|"N < M\n(more consumers)"| E["Một số consumers IDLE\n❌ Lãng phí resources"]
+```d2 title="Partition Assignment Rules"
+direction: down
+A: "Topic: N Partitions\nGroup: M Consumers"
+B: "So sánh N vs M" { shape: diamond }
+C: "Một số consumers\nxử lý nhiều hơn 1 partition\n✅ Tất cả partitions được xử lý"
+D: "Mỗi consumer xử lý\nđúng 1 partition\n✅ Optimal"
+E: "Một số consumers IDLE\n❌ Lãng phí resources"
+A -> B
+B -> C: "N > M\n(more partitions)"
+B -> D: "N = M\n(equal)"
+B -> E: "N < M\n(more consumers)"
 ```
 
 | Partitions | Consumers | Phân phối | Nhận xét |
@@ -117,31 +129,24 @@ flowchart TD
 
 Consumer duy trì **heartbeat** để báo với Broker rằng nó vẫn sống:
 
-```mermaid
-sequenceDiagram
-    participant C as Consumer
-    participant Coord as Group Coordinator
-
-    loop Every heartbeat.interval.ms (15s)
-        C->>Coord: ❤️ Heartbeat
-        Coord-->>C: OK
-    end
-
-    Note over C: Consumer bị hang (long processing)
-
-    loop Tiếp tục heartbeat dù đang process
-        C->>Coord: ❤️ Heartbeat (background thread)
-        Coord-->>C: OK
-    end
-
-    Note over C: Consumer crash / network down
-
-    C--xCoord: Không có heartbeat
-
-    Note over Coord: Chờ session.timeout.ms (45s)
-
-    Coord->>Coord: Mark consumer as DEAD
-    Coord->>Coord: Trigger REBALANCE
+```d2 title="Heartbeat & Session Timeout"
+shape: sequence_diagram
+C: "Consumer"
+Coord: "Group Coordinator"
+loop1: "Lặp: Every heartbeat.interval.ms (15s)" {
+  C -> Coord: "❤️ Heartbeat"
+  Coord -> C: "OK" { style.stroke-dash: 4 }
+}
+C.note1: "Consumer bị hang (long processing)"
+loop2: "Lặp: Tiếp tục heartbeat dù đang process" {
+  C -> Coord: "❤️ Heartbeat (background thread)"
+  Coord -> C: "OK" { style.stroke-dash: 4 }
+}
+C.note2: "Consumer crash / network down"
+C -> Coord: "✕ Không có heartbeat" { style.stroke-dash: 4; target-arrowhead.shape: cross }
+Coord.note3: "Chờ session.timeout.ms (45s)"
+Coord -> Coord: "Mark consumer as DEAD"
+Coord -> Coord: "Trigger REBALANCE"
 ```
 
 ### Cấu hình timeout quan trọng
@@ -183,17 +188,21 @@ spring:
 
 Khi consumer lần đầu đọc một partition (không có committed offset), **`auto.offset.reset`** quyết định đọc từ đâu:
 
-```mermaid
-flowchart TD
-    A["Consumer start\ngroup.id = 'my-group'"] --> B{Có committed offset\ntrong __consumer_offsets?}
-
-    B -->|"✅ Có"| C["Resume từ\ncommitted offset"]
-
-    B -->|"❌ Không có (group mới)"| D{"auto.offset.reset?"}
-
-    D -->|"earliest"| E["Đọc từ Offset 0\nProcess TẤT CẢ messages\n(kể cả cũ)"]
-    D -->|"latest"| F["Đọc từ cuối log\nChỉ nhận messages MỚI\n(bỏ qua existing)"]
-    D -->|"none"| G["Throw Exception!\nNoOffsetForPartitionException"]
+```d2 title="auto.offset.reset"
+direction: down
+A: "Consumer start\ngroup.id = 'my-group'"
+B: "Có committed offset\ntrong __consumer_offsets?" { shape: diamond }
+C: "Resume từ\ncommitted offset"
+D: "auto.offset.reset?" { shape: diamond }
+E: "Đọc từ Offset 0\nProcess TẤT CẢ messages\n(kể cả cũ)"
+F: "Đọc từ cuối log\nChỉ nhận messages MỚI\n(bỏ qua existing)"
+G: "Throw Exception!\nNoOffsetForPartitionException"
+A -> B
+B -> C: "✅ Có"
+B -> D: "❌ Không có (group mới)"
+D -> E: "earliest"
+D -> F: "latest"
+D -> G: "none"
 ```
 
 **Chọn giá trị nào?**
@@ -210,36 +219,37 @@ flowchart TD
 
 Đây là concept quan trọng nhất về Consumer Group:
 
-```mermaid
-graph TD
-    subgraph "Topic: orders (4 Partitions)"
-        P0["P0"]
-        P1["P1"]
-        P2["P2"]
-        P3["P3"]
-    end
-
-    subgraph "Group A: order-processing-service"
-        CA1["Consumer A1\n(P0, P1)"]
-        CA2["Consumer A2\n(P2, P3)"]
-    end
-
-    subgraph "Group B: analytics-service"
-        CB1["Consumer B1\n(P0, P1, P2, P3)"]
-    end
-
-    subgraph "Group C: notification-service"
-        CC1["Consumer C1\n(P0, P1)"]
-        CC2["Consumer C2\n(P2, P3)"]
-    end
-
-    P0 & P1 --> CA1
-    P2 & P3 --> CA2
-
-    P0 & P1 & P2 & P3 --> CB1
-
-    P0 & P1 --> CC1
-    P2 & P3 --> CC2
+```d2 title="Fan-Out vs Load Balancing"
+direction: down
+g1: "Topic: orders (4 Partitions)" {
+  P0: "P0"
+  P1: "P1"
+  P2: "P2"
+  P3: "P3"
+}
+g2: "Group A: order-processing-service" {
+  CA1: "Consumer A1\n(P0, P1)"
+  CA2: "Consumer A2\n(P2, P3)"
+}
+g3: "Group B: analytics-service" {
+  CB1: "Consumer B1\n(P0, P1, P2, P3)"
+}
+g4: "Group C: notification-service" {
+  CC1: "Consumer C1\n(P0, P1)"
+  CC2: "Consumer C2\n(P2, P3)"
+}
+g1.P0 -> g2.CA1
+g1.P1 -> g2.CA1
+g1.P2 -> g2.CA2
+g1.P3 -> g2.CA2
+g1.P0 -> g3.CB1
+g1.P1 -> g3.CB1
+g1.P2 -> g3.CB1
+g1.P3 -> g3.CB1
+g1.P0 -> g4.CC1
+g1.P1 -> g4.CC1
+g1.P2 -> g4.CC2
+g1.P3 -> g4.CC2
 ```
 
 **Kết quả:**
@@ -263,22 +273,22 @@ graph TD
 | **Trong 1 Group** | 1 partition → đúng 1 consumer | Group A: P0 chỉ được xử lý bởi C1 |
 | **Across Groups** | 1 partition → nhiều consumers, mỗi group 1 bản copy | Group A + Group B đều đọc P0 |
 
-```mermaid
-graph TD
-    subgraph "Topic: orders"
-        P0["Partition 0"]
-    end
-
-    subgraph "Group A: Billing Service"
-        P0 -.->|Load Balanced| C1["Consumer A-1 ✅"]
-        P0 -.->|Không nhận| C2["Consumer A-2 (IDLE)"]
-    end
-
-    subgraph "Group B: Analytics Service"
-        P0 -->|Fan Out| C3["Consumer B-1 ✅"]
-    end
-
-    note["Trong Group A: CHỈ 1 consumer nhận message\nNhưng Group B cũng nhận BẢN COPY độc lập"]
+```d2 title="'Một partition chỉ kết nối 1 consumer?'"
+direction: down
+g1: "Topic: orders" {
+  P0: "Partition 0"
+}
+g2: "Group A: Billing Service" {
+  C1: "Consumer A-1 ✅"
+  C2: "Consumer A-2 (IDLE)"
+}
+g3: "Group B: Analytics Service" {
+  C3: "Consumer B-1 ✅"
+}
+note: "Trong Group A: CHỈ 1 consumer nhận message\nNhưng Group B cũng nhận BẢN COPY độc lập"
+g1.P0 -> g2.C1: "Load Balanced" { style.stroke-dash: 4 }
+g1.P0 -> g2.C2: "Không nhận" { style.stroke-dash: 4 }
+g1.P0 -> g3.C3: "Fan Out"
 ```
 
 ---
@@ -287,11 +297,16 @@ graph TD
 
 **Sai** — Kafka chỉ guarantee ordering **trong 1 partition**, không phải across toàn bộ topic.
 
-```
-Gửi: msg-A (key="user1") → Partition 0
-Gửi: msg-B (key="user2") → Partition 1
-
-Consumer đọc P1 trước P0 → thấy B trước A!
+```d2 title="Không có ordering giữa hai partition"
+direction: right
+p: Producer
+a: "P0\nmsg-A, key=user1"
+b: "P1\nmsg-B, key=user2"
+c: "Consumer\nĐọc P1 trước P0 → thấy B trước A"
+p -> a
+p -> b
+b -> c: Đọc trước
+a -> c: Đọc sau
 ```
 
 **Fix**: Dùng cùng **Key** cho các events cần ordering (ví dụ: `orderId`, `userId`).
@@ -305,9 +320,10 @@ Consumer đọc P1 trước P0 → thấy B trước A!
 
 **Sai** — Kafka Consumer **POLL** (pull), không phải push.
 
-```
-Push (RabbitMQ):  Broker → Consumer (broker quyết định pace)
-Pull (Kafka):     Consumer → Broker (consumer quyết định pace)
+```d2 title="Push và pull — ai kiểm soát tốc độ"
+direction: right
+push: "Push — RabbitMQ" {b: Broker; c: Consumer; b -> c: Broker quyết định pace}
+pull: "Pull — Kafka" {c: Consumer; b: Broker; c -> b: Consumer quyết định pace}
 ```
 
 **Lợi ích của Pull model**:
@@ -321,12 +337,30 @@ Pull (Kafka):     Consumer → Broker (consumer quyết định pace)
 
 **Trap** — "Idle Consumer Problem": không thể có nhiều active consumers hơn số partitions.
 
-```
-Topic: 6 partitions
-Group: 8 consumers
-
-→ 6 consumers active (xử lý partitions)
-→ 2 consumers IDLE (lãng phí resources!)
+```d2 title="6 partition, 8 consumer — hai consumer idle"
+direction: down
+topic: "Topic: orders" {
+  p0: "P0"
+  p1: "P1"
+  p2: "P2"
+  p3: "P3"
+  p4: "P4"
+  p5: "P5"
+}
+c1: "Consumer 1"
+topic.p0 -> c1
+c2: "Consumer 2"
+topic.p1 -> c2
+c3: "Consumer 3"
+topic.p2 -> c3
+c4: "Consumer 4"
+topic.p3 -> c4
+c5: "Consumer 5"
+topic.p4 -> c5
+c6: "Consumer 6"
+topic.p5 -> c6
+c7: "Consumer 7 (IDLE)"
+c8: "Consumer 8 (IDLE)"
 ```
 
 **Formula**: `Active Consumers = min(Total Consumers, Total Partitions)`
@@ -346,21 +380,23 @@ Group: 8 consumers
 
 **Không** — auto-commit có thể gây duplicate processing.
 
-```
-Timeline:
-1. Consumer poll() → nhận message
-2. Auto-commit chạy (offset +1) ← commit TRƯỚC khi xử lý xong
-3. Consumer xử lý message...
-4. 💥 Consumer crash!
-5. Consumer restart → tiếp tục từ offset đã commit
-6. → Message bị SKIP (chưa xử lý xong nhưng offset đã commit)
-
-HOẶC ngược lại:
-1. Consumer poll() → nhận message
-2. Consumer xử lý message xong
-3. 💥 Crash TRƯỚC khi auto-commit chạy
-4. Consumer restart → đọc lại message cũ
-5. → Message bị DUPLICATE
+```d2 title="Auto-commit và cửa sổ crash"
+direction: down
+loss: "Commit trước khi xử lý xong" {
+  poll: poll nhận message
+  commit: Auto-commit offset +1
+  process: Đang xử lý
+  crash: Crash trước khi xong
+  restart: "Restart từ offset đã commit\nMessage bị SKIP"
+  poll -> commit -> process -> crash -> restart
+}
+dup: "Xử lý xong trước khi commit" {
+  poll: poll nhận message
+  process: Xử lý thành công
+  crash: Crash trước auto-commit
+  restart: "Restart đọc lại message\nMessage bị DUPLICATE"
+  poll -> process -> crash -> restart
+}
 ```
 
 **Fix**: Dùng `enable.auto.commit=false` + manual acknowledge.

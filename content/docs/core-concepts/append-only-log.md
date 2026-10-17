@@ -28,14 +28,17 @@ description: "Cách Kafka lưu record theo append-only log, log segment, index, 
 
 Ví dụ, partition `orders-0` đã có ba record. Khi có đơn hàng mới, broker thêm record đó vào cuối log. Broker không tìm một vị trí bất kỳ trong file để chèn hoặc cập nhật record cũ.
 
-```text
-Partition orders-0
-
-Offset:   0           1           2           3
-       ┌─────────┬─────────┬─────────┬─────────┐
-Log:   │ created │ paid    │ shipped │ created │  ← record mới append ở cuối
-       └─────────┴─────────┴─────────┴─────────┘
-          order-1   order-1   order-1   order-2
+```d2 title="Append record vào cuối partition"
+direction: right
+partition: "orders-0 — append-only log" {
+  r0: "Offset 0\ncreated\norder-1"
+  r1: "Offset 1\npaid\norder-1"
+  r2: "Offset 2\nshipped\norder-1"
+  r3: "Offset 3\ncreated\norder-2"
+  r0 -> r1 -> r2 -> r3: Thứ tự trong log
+}
+append: Record mới
+append -> partition.r3: Append ở cuối
 ```
 
 Mỗi record nhận một **offset** tăng dần trong phạm vi partition. Offset là vị trí logic của record trong log, không phải ID toàn cục của topic hay toàn cluster.
@@ -48,13 +51,17 @@ Mỗi record nhận một **offset** tăng dần trong phạm vi partition. Offs
 
 Một topic được chia thành nhiều partition. Mỗi partition có log riêng, offset riêng và thứ tự riêng.
 
-```mermaid
-flowchart LR
-  P[Producer] -->|record có key order-17| PT0[orders-0\nappend-only log]
-  P -->|record có key order-42| PT1[orders-1\nappend-only log]
-
-  PT0 --> C0[Consumer đọc theo offset]
-  PT1 --> C1[Consumer đọc theo offset]
+```d2 title="Một partition là một log độc lập"
+direction: right
+P: "Producer"
+PT0: "orders-0\nappend-only log"
+PT1: "orders-1\nappend-only log"
+C0: "Consumer đọc theo offset"
+C1: "Consumer đọc theo offset"
+P -> PT0: "record có key order-17"
+P -> PT1: "record có key order-42"
+PT0 -> C0
+PT1 -> C1
 ```
 
 Vì record được append tuần tự trong từng partition, Kafka đảm bảo thứ tự ghi cho các record **trong cùng partition**. Kafka không tạo một thứ tự tổng quát giữa `orders-0` và `orders-1`.
@@ -72,18 +79,17 @@ Nếu tất cả event của một đơn hàng phải đúng thứ tự, produce
 
 Khi producer gửi record đến leader của partition, leader broker thực hiện append vào active segment. Với topic có replication, follower replica fetch record từ leader để sao chép log đó.
 
-```mermaid
-sequenceDiagram
-  participant P as Producer
-  participant L as Leader broker
-  participant S as Active log segment
-  participant F as Follower replica
-
-  P->>L: Produce(record)
-  L->>S: Append record vào cuối segment
-  L->>F: Replica fetch có record mới
-  F-->>L: Replica ack
-  L-->>P: Produce response theo acks
+```d2 title="Luồng ghi record"
+shape: sequence_diagram
+P: "Producer"
+L: "Leader broker"
+S: "Active log segment"
+F: "Follower replica"
+P -> L: "Produce(record)"
+L -> S: "Append record vào cuối segment"
+L -> F: "Replica fetch có record mới"
+F -> L: "Replica ack" { style.stroke-dash: 4 }
+L -> P: "Produce response theo acks" { style.stroke-dash: 4 }
 ```
 
 Record đã được ghi không bị sửa tại chỗ. Nếu business cần biểu diễn “đơn hàng bị hủy”, cách thông thường là append một event mới như `OrderCancelled`; không cập nhật byte của event `OrderCreated` trước đó.
@@ -122,13 +128,17 @@ Tại một thời điểm, mỗi partition chỉ có một **active segment**. 
 
 Khi active segment đạt `segment.bytes` hoặc đủ lâu theo `segment.ms`, Kafka đóng segment đó và tạo active segment mới. Segment đã đóng không nhận record mới; vì vậy Kafka có thể xóa hoặc compact toàn bộ segment một cách an toàn hơn.
 
-```text
-Closed segment                     Active segment
-┌─────────────────────────┐       ┌─────────────────────────┐
-│ 0.log                   │       │ 1024.log                │
-│ [0] [1] ... [1023]      │       │ [1024] [1025] ...       │
-└─────────────────────────┘       └─────────────────────────┘
-  có thể bị retention xóa            chỉ append ở cuối
+```d2 title="Closed segment và active segment"
+direction: right
+closed: "Closed segment" {
+  log: "0.log\n[0] [1] … [1023]"
+  retention: "Có thể bị retention xóa"
+}
+active: "Active segment" {
+  log: "1024.log\n[1024] [1025] …"
+  append: Chỉ append ở cuối
+}
+closed -> active: Segment kế tiếp
 ```
 
 ### Offset index và time index
@@ -145,19 +155,18 @@ Index thưa không lưu entry cho mọi record. Kafka tìm entry gần nhất tr
 
 Consumer không “pop” record khỏi Kafka. Consumer gửi fetch request với vị trí hiện tại, chẳng hạn offset `1050`. Broker xác định segment chứa offset đó, dùng index để tìm gần đúng, sau đó trả về một batch record bắt đầu từ vị trí phù hợp.
 
-```mermaid
-sequenceDiagram
-  participant C as Consumer
-  participant B as Leader broker
-  participant I as Offset index
-  participant L as Log segment
-
-  C->>B: Fetch từ offset 1050
-  B->>I: Tìm entry gần 1050
-  I-->>B: offset 1048 → byte position
-  B->>L: Đọc tuần tự từ byte position
-  L-->>B: Batch 1050..n
-  B-->>C: Fetch response
+```d2 title="Đọc record theo offset"
+shape: sequence_diagram
+C: "Consumer"
+B: "Leader broker"
+I: "Offset index"
+L: "Log segment"
+C -> B: "Fetch từ offset 1050"
+B -> I: "Tìm entry gần 1050"
+I -> B: "offset 1048 → byte position" { style.stroke-dash: 4 }
+B -> L: "Đọc tuần tự từ byte position"
+L -> B: "Batch 1050..n" { style.stroke-dash: 4 }
+B -> C: "Fetch response" { style.stroke-dash: 4 }
 ```
 
 Consumer có thể commit offset `1051` sau khi xử lý record `1050`. Offset commit này không thay đổi log; nó chỉ lưu checkpoint rằng consumer group sẽ đọc tiếp từ đâu khi restart hoặc rebalance.
@@ -192,12 +201,20 @@ segment.bytes=1073741824     # 1 GiB
 
 Với compacted topic, Kafka vẫn append mọi record mới. Log cleaner chạy bất đồng bộ sau đó mới loại bớt record cũ có cùng key.
 
-```text
-Trước compaction:
-[ user-1 → bronze ] [ user-2 → silver ] [ user-1 → gold ]
-
-Sau compaction:
-[ user-2 → silver ] [ user-1 → gold ]
+```d2 title="Compaction giữ trạng thái mới nhất của key"
+direction: right
+before: "Trước compaction" {
+  a: "user-1 → bronze"
+  b: "user-2 → silver"
+  c: "user-1 → gold"
+  a -> b -> c
+}
+after: "Sau compaction" {
+  b: "user-2 → silver"
+  c: "user-1 → gold"
+  b -> c
+}
+before -> after: Compaction
 ```
 
 Compaction đảm bảo consumer đọc từ đầu log cuối cùng sẽ thấy trạng thái mới nhất cho mỗi key, trong giới hạn các quy tắc tombstone và cleaner. Nó **không** đảm bảo mọi consumer luôn chỉ nhận bản ghi mới nhất tại mọi thời điểm.

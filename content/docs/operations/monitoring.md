@@ -22,44 +22,57 @@ description: "Giám sát Kafka cluster trong production: JMX metrics quan trọn
 
 ## Tại sao Monitoring quan trọng?
 
-```
-┌─────────────────────────────────────────────────────────────────────────────────┐
-│                    KAFKA FAILURE SCENARIOS VÀ DẤU HIỆU                          │
-├─────────────────────────────────────────────────────────────────────────────────┤
-│                                                                                 │
-│  Scenario 1: Consumer bị stuck                                                  │
-│  Dấu hiệu: Consumer lag tăng liên tục, processing rate = 0                      │
-│  Nguyên nhân thường gặp: Deadlock, OOM, database connection pool exhausted      │
-│                                                                                 │
-│  Scenario 2: Broker disk đầy                                                    │
-│  Dấu hiệu: Produce fails, under-replicated partitions tăng                      │
-│  Nguyên nhân: Retention quá cao, traffic spike, disk không đủ                   │
-│                                                                                 │
-│  Scenario 3: Rebalance storm                                                    │
-│  Dấu hiệu: Rebalance frequency tăng, consumer lag spike mỗi rebalance           │
-│  Nguyên nhân: Consumer timeout, GC pause, slow processing                       │
-│                                                                                 │
-│  Scenario 4: Network partition                                                  │
-│  Dấu hiệu: Under-replicated partitions, leader election events                  │
-│  Nguyên nhân: Network issues giữa brokers                                       │
-│                                                                                 │
-│  → Tất cả có thể phát hiện SỚM qua metrics!                                     │
-└─────────────────────────────────────────────────────────────────────────────────┘
-```
+<Callout type="info">
+
+KAFKA FAILURE SCENARIOS VÀ DẤU HIỆU
+
+Scenario 1: Consumer bị stuck
+
+Dấu hiệu: Consumer lag tăng liên tục, processing rate = 0
+
+Nguyên nhân thường gặp: Deadlock, OOM, database connection pool exhausted
+
+Scenario 2: Broker disk đầy
+
+Dấu hiệu: Produce fails, under-replicated partitions tăng
+
+Nguyên nhân: Retention quá cao, traffic spike, disk không đủ
+
+Scenario 3: Rebalance storm
+
+Dấu hiệu: Rebalance frequency tăng, consumer lag spike mỗi rebalance
+
+Nguyên nhân: Consumer timeout, GC pause, slow processing
+
+Scenario 4: Network partition
+
+Dấu hiệu: Under-replicated partitions, leader election events
+
+Nguyên nhân: Network issues giữa brokers
+
+→ Tất cả có thể phát hiện SỚM qua metrics!
+
+</Callout>
 
 ---
 
 ## Metrics Hierarchy
 
-```mermaid
-graph TB
-    subgraph "Kafka Monitoring Stack"
-        A["Kafka Brokers\n(JMX metrics)"] -->|"jmx_exporter\nagent"| B["Prometheus\n(scrape & store)"]
-        C["Consumers/Producers\n(Micrometer)"] -->|"actuator/prometheus"| B
-        D["Kafka Connect\n(JMX metrics)"] -->|"jmx_exporter"| B
-        B -->|"query"| E["Grafana\n(dashboards)"]
-        B -->|"evaluate rules"| F["AlertManager\n(PagerDuty/Slack)"]
-    end
+```d2 title="Metrics Hierarchy"
+direction: down
+g1: "Kafka Monitoring Stack" {
+  A: "Kafka Brokers\n(JMX metrics)"
+  B: "Prometheus\n(scrape & store)"
+  C: "Consumers/Producers\n(Micrometer)"
+  D: "Kafka Connect\n(JMX metrics)"
+  E: "Grafana\n(dashboards)"
+  F: "AlertManager\n(PagerDuty/Slack)"
+}
+g1.A -> g1.B: "jmx_exporter\nagent"
+g1.C -> g1.B: "actuator/prometheus"
+g1.D -> g1.B: "jmx_exporter"
+g1.B -> g1.E: "query"
+g1.B -> g1.F: "evaluate rules"
 ```
 
 ---
@@ -127,21 +140,19 @@ rules:
 
 **Consumer Lag** = số messages consumer chưa xử lý. Đây là chỉ số health quan trọng nhất.
 
-```
-┌─────────────────────────────────────────────────────────────────────────────────┐
-│                    CONSUMER LAG INTERPRETATION                                  │
-├──────────────────┬──────────────────────────────────────────────────────────────┤
-│  LAG             │  MEANING                                                     │
-├──────────────────┼──────────────────────────────────────────────────────────────┤
-│  0               │  ✅ Perfect — consumer bắt kịp producer                      │
-│  1 - 100         │  ✅ Normal fluctuation                                       │
-│  100 - 1,000     │  ⚠️  Consumer đang chậm lại — điều tra                       │
-│  1,000 - 10,000  │  🚨 Backlog nghiêm trọng — cần scale up                      │
-│  > 10,000        │  🔥 Consumer không bắt kịp — urgent!                         │
-│  Đang TĂNG       │  🔥 Xu hướng xấu dù lag hiện tại nhỏ                         │
-│  Đang GIẢM       │  ✅ Consumer đang catch up                                   │
-└──────────────────┴──────────────────────────────────────────────────────────────┘
-```
+| Lag trong ví dụ | Ý nghĩa |
+| --- | --- |
+| 0 | Consumer bắt kịp producer |
+| 1–100 | Dao động bình thường |
+| 100–1.000 | Consumer chậm lại — điều tra |
+| 1.000–10.000 | Backlog nghiêm trọng — kiểm tra khả năng scale |
+| > 10.000 | Consumer không bắt kịp — cần xử lý |
+| Đang tăng | Xu hướng xấu dù lag hiện tại nhỏ |
+| Đang giảm | Consumer đang catch up |
+
+<Callout type="info">
+Các ngưỡng trên chỉ minh họa. Đặt alert theo traffic, tốc độ xử lý, time lag và SLO của từng workload.
+</Callout>
 
 ### Xem Consumer Lag via CLI
 

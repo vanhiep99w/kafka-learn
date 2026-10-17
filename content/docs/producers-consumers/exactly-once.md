@@ -55,16 +55,17 @@ Nói ngắn gọn, ba guarantee là ba cách chọn vị trí của sự xác nh
 
 Ba điểm dưới đây là nơi cần kiểm tra khi đọc hoặc thiết kế một pipeline:
 
-```mermaid
-flowchart LR
-    P[Producer] -->|produce record| K[(Kafka topic)]
-    K -->|poll record| C[Consumer]
-    C -->|business side effect| D[(DB / External API)]
-    C -->|commit offset| O[__consumer_offsets]
-
-    style K fill:#dbeafe,stroke:#2563eb
-    style D fill:#fef3c7,stroke:#d97706
-    style O fill:#ede9fe,stroke:#7c3aed
+```d2 title="Ba điểm xác nhận quyết định guarantee"
+direction: right
+P: "Producer"
+K: "Kafka topic" { shape: cylinder }
+C: "Consumer"
+D: "DB / External API" { shape: cylinder }
+O: "__consumer_offsets"
+P -> K: "produce record"
+K -> C: "poll record"
+C -> D: "business side effect"
+C -> O: "commit offset"
 ```
 
 1. **Producer acknowledgment**: producer có retry khi không nhận `ACK` hay không?
@@ -83,19 +84,18 @@ Không thể atomically gộp database, API bên thứ ba và Kafka offset chỉ
 
 Với consumer, cách quen thuộc để có at-most-once là **commit offset trước business logic**:
 
-```mermaid
-sequenceDiagram
-    participant K as Kafka
-    participant C as Consumer
-    participant DB as Database
-
-    K-->>C: record offset=42
-    C->>K: commit offset=43
-    Note over K,C: Kafka coi record 42 đã xử lý
-    C->>DB: ghi side effect
-    Note over C: Crash trước khi DB hoàn tất
-    Note over K: Restart sẽ bắt đầu từ offset=43
-    Note over C,DB: Record 42 bị mất khỏi góc nhìn business
+```d2 title="Luồng xử lý và failure window"
+shape: sequence_diagram
+K: "Kafka"
+C: "Consumer"
+DB: "Database"
+K -> C: "record offset=42" { style.stroke-dash: 4 }
+C -> K: "commit offset=43"
+K.note1: "K / C: Kafka coi record 42 đã xử lý"
+C -> DB: "ghi side effect"
+C.note2: "Crash trước khi DB hoàn tất"
+K.note3: "Restart sẽ bắt đầu từ offset=43"
+C.note4: "C / DB: Record 42 bị mất khỏi góc nhìn business"
 ```
 
 Offset `43` có nghĩa là consumer group sẽ đọc từ record kế tiếp; offset `42` đã được đánh dấu hoàn tất. Nếu process chết sau commit, Kafka sẽ không redeliver record `42`, dù xử lý business chưa xong.
@@ -153,20 +153,19 @@ public void consume(ConsumerRecord<String, AnalyticsEvent> record, Acknowledgmen
 
 Để đạt at-least-once ở consumer, đảo thứ tự: **xử lý business trước, commit offset sau**.
 
-```mermaid
-sequenceDiagram
-    participant K as Kafka
-    participant C as Consumer
-    participant DB as Database
-
-    K-->>C: record offset=42, eventId=evt-9
-    C->>DB: áp dụng business change cho evt-9
-    DB-->>C: success
-    Note over C: Crash trước commit offset
-    Note over K: offset 42 chưa commit
-    K-->>C: redeliver offset=42 sau restart/rebalance
-    C->>DB: áp dụng lại evt-9
-    Note over C,DB: Không mất event, nhưng side effect có thể lặp
+```d2 title="Luồng xử lý và failure window"
+shape: sequence_diagram
+K: "Kafka"
+C: "Consumer"
+DB: "Database"
+K -> C: "record offset=42, eventId=evt-9" { style.stroke-dash: 4 }
+C -> DB: "áp dụng business change cho evt-9"
+DB -> C: "success" { style.stroke-dash: 4 }
+C.note1: "Crash trước commit offset"
+K.note2: "offset 42 chưa commit"
+K -> C: "redeliver offset=42 sau restart/rebalance" { style.stroke-dash: 4 }
+C -> DB: "áp dụng lại evt-9"
+C.note3: "C / DB: Không mất event, nhưng side effect có thể lặp"
 ```
 
 Với ví dụ này, Kafka đã làm đúng: nó giao lại record chưa được commit. Rủi ro nằm ở `UPDATE balance = balance + 100` hoặc gọi `POST /charge` lần thứ hai. Vì vậy at-least-once thường đi cùng **consumer idempotency**.
@@ -275,16 +274,19 @@ EOS trong Kafka cần các điều kiện sau:
 3. Consumer đọc output transaction phải dùng `isolation.level=read_committed` để không nhìn thấy record bị abort hoặc đang pending.
 4. Toàn bộ kết quả cần bảo đảm phải ở trong Kafka transaction boundary. Database, email, HTTP API hoặc file system không tự động nằm trong boundary này.
 
-```mermaid
-flowchart LR
-    I[(orders-raw)] --> C[Consume + transform]
-    C --> T{{Kafka transaction}}
-    T --> O[(orders-enriched)]
-    T --> X[Commit input offset]
-    O --> R[Consumer với read_committed]
-
-    style T fill:#dcfce7,stroke:#16a34a,stroke-width:2px
-    style O fill:#dbeafe,stroke:#2563eb
+```d2 title="Định nghĩa chính xác và các điều kiện"
+direction: right
+I: "orders-raw" { shape: cylinder }
+C: "Consume + transform"
+T: "Kafka transaction" { shape: hexagon }
+O: "orders-enriched" { shape: cylinder }
+X: "Commit input offset"
+R: "Consumer với read_committed"
+I -> C
+C -> T
+T -> O
+T -> X
+O -> R
 ```
 
 Nếu transaction commit thành công, output record **và** offset cùng xuất hiện. Nếu transaction abort, cả hai cùng biến mất khỏi góc nhìn `read_committed`. Đây là atomicity mà at-least-once không có.
@@ -293,17 +295,16 @@ Nếu transaction commit thành công, output record **và** offset cùng xuất
 
 Idempotent producer là một building block quan trọng, nhưng phạm vi của nó hẹp hơn EOS:
 
-```mermaid
-sequenceDiagram
-    participant P as Producer (PID=1001)
-    participant B as Kafka partition
-
-    P->>B: send Order-123, sequence=7
-    B->>B: ghi tại offset 100
-    B--xP: ACK bị mất trên mạng
-    P->>B: retry Order-123, sequence=7
-    B->>B: nhận ra PID + sequence đã ghi
-    B-->>P: trả ACK cũ, không ghi record mới
+```d2 title="Idempotent producer không phải end-to-end EOS"
+shape: sequence_diagram
+P: "Producer (PID=1001)"
+B: "Kafka partition"
+P -> B: "send Order-123, sequence=7"
+B -> B: "ghi tại offset 100"
+B -> P: "✕ ACK bị mất trên mạng" { style.stroke-dash: 4; target-arrowhead.shape: cross }
+P -> B: "retry Order-123, sequence=7"
+B -> B: "nhận ra PID + sequence đã ghi"
+B -> P: "trả ACK cũ, không ghi record mới" { style.stroke-dash: 4 }
 ```
 
 Kafka gán producer một **PID** (Producer ID) và sequence number tăng dần theo partition. Broker theo dõi sequence đã chấp nhận cho PID đó, nên retry cùng sequence không tạo record thứ hai.
@@ -321,23 +322,22 @@ Tuy nhiên, idempotent producer không giải quyết các trường hợp sau:
 
 Luồng sau minh họa failure path. Từ góc nhìn consumer downstream dùng `read_committed`, không có output "mồ côi" nào được nhìn thấy.
 
-```mermaid
-sequenceDiagram
-    participant In as orders-raw
-    participant App as Enrichment service
-    participant Out as orders-enriched
-    participant Offset as __consumer_offsets
-
-    In-->>App: poll offset 42
-    App->>App: begin Kafka transaction
-    App->>Out: send enriched event (pending)
-    App->>Offset: add offset 43 to transaction
-    Note over App: Crash hoặc exception
-    App->>Out: abort transaction
-    Note over Out,Offset: Output không visible, offset 42 không commit
-    In-->>App: redeliver offset 42
-    App->>App: retry và commit transaction
-    Note over Out,Offset: Output visible một lần; offset cùng được commit
+```d2 title="Kafka transaction cho luồng Kafka → Kafka"
+shape: sequence_diagram
+In: "orders-raw"
+App: "Enrichment service"
+Out: "orders-enriched"
+Offset: "__consumer_offsets"
+In -> App: "poll offset 42" { style.stroke-dash: 4 }
+App -> App: "begin Kafka transaction"
+App -> Out: "send enriched event (pending)"
+App -> Offset: "add offset 43 to transaction"
+App.note1: "Crash hoặc exception"
+App -> Out: "abort transaction"
+Out.note2: "Out / Offset: Output không visible, offset 42 không commit"
+In -> App: "redeliver offset 42" { style.stroke-dash: 4 }
+App -> App: "retry và commit transaction"
+Out.note3: "Out / Offset: Output visible một lần; offset cùng được commit"
 ```
 
 Với Kafka Streams, EOS được bật qua `processing.guarantee=exactly_once_v2`. Kafka Streams tự quản lý việc commit offset và output trong transaction, nên đây thường là cách ít boilerplate nhất cho pipeline transform thuần Kafka.
@@ -404,12 +404,16 @@ public void enrich(OrderEvent event) {
 
 Kafka transaction **không** bao bọc transaction của PostgreSQL, REST API, Stripe hoặc email provider. Vì vậy pipeline dưới đây chưa phải end-to-end EOS chỉ vì `KafkaTemplate` đã transactional:
 
-```text
-Kafka input ──► Consumer ──► PostgreSQL / HTTP API
-                    │
-                    └──► Kafka offset
-
-Không có một transaction Kafka đơn lẻ bao trùm cả PostgreSQL/HTTP và offset.
+```d2 title="Kafka transaction không bao trùm PostgreSQL hoặc HTTP"
+direction: right
+input: Kafka input
+c: Consumer
+db: PostgreSQL / HTTP API
+offset: Kafka offset
+input -> c
+c -> db: Business side effect
+c -> offset: Commit
+note: "Không có một Kafka transaction đơn lẻ\nbao trùm cả PostgreSQL / HTTP và offset"
 ```
 
 Các lựa chọn thực tế:
@@ -456,18 +460,21 @@ public void charge(PaymentRequest event) {
 
 Cây quyết định nhanh:
 
-```mermaid
-flowchart TD
-    A[Có chấp nhận mất một event?] -->|Có| B[At-most-once]
-    A -->|Không| C{Output chỉ ở Kafka?}
-    C -->|Không| D[At-least-once + idempotency / outbox]
-    C -->|Có| E{Cần offset và output atomic?}
-    E -->|Không| F[At-least-once + idempotent consumer]
-    E -->|Có| G[Kafka transactions / EOS]
-
-    style B fill:#fee2e2,stroke:#dc2626
-    style D fill:#fef3c7,stroke:#d97706
-    style G fill:#dcfce7,stroke:#16a34a
+```d2 title="So sánh và chọn guarantee"
+direction: down
+A: "Có chấp nhận mất một event?"
+B: "At-most-once"
+C: "Output chỉ ở Kafka?" { shape: diamond }
+D: "At-least-once + idempotency / outbox"
+E: "Cần offset và output atomic?" { shape: diamond }
+F: "At-least-once + idempotent consumer"
+G: "Kafka transactions / EOS"
+A -> B: "Có"
+A -> C: "Không"
+C -> D: "Không"
+C -> E: "Có"
+E -> F: "Không"
+E -> G: "Có"
 ```
 
 Mặc định tốt cho một business consumer là: producer bền vững, consumer **at-least-once**, và handler idempotent. Chỉ thêm Kafka EOS khi pipeline Kafka → Kafka thực sự cần atomicity giữa output và offset. Đây là một quyết định theo failure mode, không phải checkbox để "an toàn hơn" một cách chung chung.

@@ -25,21 +25,31 @@ description: "Testing Kafka producers và consumers trong Spring Boot: @Embedded
 
 ## Testing Strategies
 
-```mermaid
-flowchart TD
-    A["Test Kafka Application"] --> B{Test loại gì?}
-
-    B -->|"Producer logic"| C["Unit Test\nMock KafkaTemplate"]
-    B -->|"Consumer logic"| D["Integration Test\n@EmbeddedKafka + @KafkaListener"]
-    B -->|"End-to-End"| E["Integration Test\nProducer → Kafka → Consumer"]
-    B -->|"Kafka Streams"| F["Unit Test\nTopologyTestDriver"]
-    B -->|"Error Handling"| G["Integration Test\n@EmbeddedKafka + DLT"]
-
-    C --> C1["@MockBean KafkaTemplate\nVerify .send() được gọi"]
-    D --> D1["@EmbeddedKafka\nSend message → verify consumer xử lý"]
-    E --> E1["@EmbeddedKafka\nFull flow: produce → consume → verify"]
-    F --> F1["TopologyTestDriver\nNo broker cần thiết"]
-    G --> G1["@EmbeddedKafka\nSend bad message → verify DLT"]
+```d2 title="Testing Strategies"
+direction: down
+A: "Test Kafka Application"
+B: "Test loại gì?" { shape: diamond }
+C: "Unit Test\nMock KafkaTemplate"
+D: "Integration Test\n@EmbeddedKafka + @KafkaListener"
+E: "Integration Test\nProducer → Kafka → Consumer"
+F: "Unit Test\nTopologyTestDriver"
+G: "Integration Test\n@EmbeddedKafka + DLT"
+C1: "@MockBean KafkaTemplate\nVerify .send() được gọi"
+D1: "@EmbeddedKafka\nSend message → verify consumer xử lý"
+E1: "@EmbeddedKafka\nFull flow: produce → consume → verify"
+F1: "TopologyTestDriver\nNo broker cần thiết"
+G1: "@EmbeddedKafka\nSend bad message → verify DLT"
+A -> B
+B -> C: "Producer logic"
+B -> D: "Consumer logic"
+B -> E: "End-to-End"
+B -> F: "Kafka Streams"
+B -> G: "Error Handling"
+C -> C1
+D -> D1
+E -> E1
+F -> F1
+G -> G1
 ```
 
 ---
@@ -678,19 +688,25 @@ class OrderStreamProcessorTest {
 
 ### Khi nào dùng cái nào?
 
-```mermaid
-flowchart TD
-    A["Cần test Kafka code"] --> B{"Test logic hay test infrastructure?"}
-
-    B -->|"Business logic\n(transform, filter, route)"| C["Unit Test\nMock KafkaTemplate"]
-    B -->|"Kafka behavior\n(serialization, partitioning)"| D["@EmbeddedKafka\nIntegration Test"]
-
-    C --> C1["@MockBean KafkaTemplate\nVerify send() parameters"]
-    D --> D1["Real broker\nReal serialization\nReal partitioning"]
-
-    D --> E{"Test Streams?"}
-    E -->|"Yes"| F["TopologyTestDriver\n(Nhanh hơn EmbeddedKafka)"]
-    E -->|"No"| G["@EmbeddedKafka\n+ @KafkaListener"]
+```d2 title="Khi nào dùng cái nào?"
+direction: down
+A: "Cần test Kafka code"
+B: "Test logic hay test infrastructure?" { shape: diamond }
+C: "Unit Test\nMock KafkaTemplate"
+D: "@EmbeddedKafka\nIntegration Test"
+C1: "@MockBean KafkaTemplate\nVerify send() parameters"
+D1: "Real broker\nReal serialization\nReal partitioning"
+E: "Test Streams?" { shape: diamond }
+F: "TopologyTestDriver\n(Nhanh hơn EmbeddedKafka)"
+G: "@EmbeddedKafka\n+ @KafkaListener"
+A -> B
+B -> C: "Business logic\n(transform, filter, route)"
+B -> D: "Kafka behavior\n(serialization, partitioning)"
+C -> C1
+D -> D1
+D -> E
+E -> F: "Yes"
+E -> G: "No"
 ```
 
 ---

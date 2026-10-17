@@ -1,4 +1,10 @@
 @import 'fumadocs-ui/style.css';
+@import '@vanhiep99w/docs-kit/styles/d2.css';
+@import '@vanhiep99w/docs-kit/styles/terminal-session.css';
+@import '@vanhiep99w/docs-kit/styles/code-diff.css';
+@import '@vanhiep99w/docs-kit/styles/code-walkthrough.css';
+@import '@vanhiep99w/docs-kit/styles/protocol-exchange.css';
+@import '@vanhiep99w/docs-kit/styles/span-waterfall.css';
 
 :root {
   --fd-layout-width: 100vw;

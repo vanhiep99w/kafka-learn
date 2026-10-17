@@ -42,19 +42,18 @@ Câu hỏi này kiểm tra một điều: bạn có hiểu Kafka là **commit lo
 
 Trước khi trả lời "vì sao xóa", phải hiểu "Kafka lưu như gì". Một partition trong Kafka là một **file log append-only** — message chỉ được **thêm vào cuối**, không bao giờ sửa, không bao giờ xóa chủ động:
 
-```
-Partition 0 (commit log):
-
-   offset 0   offset 1   offset 2   offset 3   offset 4   ...
-  ┌──────────┬──────────┬──────────┬──────────┬──────────┬─────┐
-  │  msg 0   │  msg 1   │  msg 2   │  msg 3   │  msg 4   │ ... │  ← chỉ append vào cuối
-  └──────────┴──────────┴──────────┴──────────┴──────────┴─────┘
-     ↑                                                    ↑
-   cũ nhất                                          mới nhất (LEO)
-
-   ❌ Không có index theo value (không thể search "message có orderId=123")
-   ❌ Không có WHERE / SELECT
-   ✅ Chỉ đọc tuần tự từ một offset
+```d2 title="Append-only log không phải index theo value"
+direction: right
+log: "Partition 0 — đọc tuần tự từ offset" {
+  m0: "Offset 0\nConsumer position\nOldest"
+  m1: "Offset 1"
+  m2: "Offset 2"
+  m3: "Offset 3"
+  m4: "Offset 4\nNewest record"
+  m0 -> m1 -> m2 -> m3 -> m4: Append order
+}
+leo: "Log end offset (LEO): 5\nVị trí kế tiếp sau record cuối"
+note: "Không index theo value; không WHERE / SELECT\nKhông search trực tiếp orderId=123"
 ```
 
 ### So sánh với database
@@ -94,19 +93,19 @@ Thiết kế: Kafka tối ưu cho "đọc gần đây, ghi nhanh"
 
 Vì vậy Kafka có cơ chế **retention** — tự động xóa message cũ theo thời gian hoặc kích thước:
 
-```text
-Topic: events (retention.ms = 604800000  → 7 ngày)
+Ví dụ topic `events` với `retention.ms=604800000` (7 ngày), tại thời điểm hôm nay:
 
-   T = hôm nay
-   ├─ message offset 10000 ─────────────────── còn ✅ (mới 1 ngày)
-   ├─ message offset 5000  ─────────────────── còn ✅ (mới 5 ngày)
-   ├─ message offset 100   ─────────────────── còn ✅ (mới 6 ngày)
-   ├─ message offset 50    ─────────────────── XÓA ❌ (đã 8 ngày)
-   └─ message offset 0     ─────────────────── XÓA ❌ (đã 10 ngày)
+| Offset minh họa | Tuổi dữ liệu | Trạng thái sau khi segment đủ điều kiện được dọn |
+| --- | --- | --- |
+| 10000 | 1 ngày | Còn |
+| 5000 | 5 ngày | Còn |
+| 100 | 6 ngày | Còn |
+| 50 | 8 ngày | Đã bị xóa |
+| 0 | 10 ngày | Đã bị xóa |
 
-   → consumer mới reset về offset 0 → OffsetOutOfRangeException!
-   → offset 0 đến 49 đã bị dọn dẹp, không còn tồn tại
-```
+<Callout type="warn">
+Retention dọn theo **segment**, không đảm bảo xóa từng record đúng lúc tròn 7 ngày. Trong ví dụ offset 0–99 đã bị dọn, vị trí đầu còn đọc được là 100; seek về 0 không thể lấy lại dữ liệu đã xóa. Tùy API và `auto.offset.reset`, consumer sẽ reset vị trí hoặc báo lỗi offset ngoài phạm vi.
+</Callout>
 
 ### Các thông số retention
 
@@ -271,18 +270,18 @@ Hậu quả: KHÔNG THỂ replay tháng 1–2
 
 ### Phân tích: sai ở đâu?
 
-```
-❌ SAI:  Kafka topic (retention 7 ngày) = nguồn dữ liệu duy nhất
-         → data cũ bị xóa, không lấy lại được
-
-✅ ĐÚNG: Pipeline đúng vai trò:
-         Producer → Kafka (retention ngắn, luồng)
-                → Kafka Connect sink → Postgres / S3 (lưu trữ vĩnh viễn)
-                                   → query lại được bao lâu tùy thích
-
-   Replay logic:
-   • dữ liệu < 7 ngày  → replay từ Kafka (nhanh, vì Kafka còn giữ)
-   • dữ liệu > 7 ngày  → query từ sink (Postgres/S3)
+```d2 title="Sink lưu dài hạn, Kafka phục vụ replay trong retention"
+direction: right
+p: Producer
+k: "Kafka\nRetention ngắn — ví dụ 7 ngày"
+connect: Kafka Connect sink
+db: "PostgreSQL / S3\nLưu dài hạn theo policy của sink"
+recent: Replay dữ liệu còn trong retention
+older: Query / reprocess lịch sử từ sink
+p -> k -> connect -> db
+k -> recent: Dữ liệu < 7 ngày
+db -> older: Dữ liệu > 7 ngày
+note: "Không dùng topic retention 7 ngày\nlàm nguồn duy nhất cho báo cáo lịch sử"
 ```
 
 ### Các pattern phòng tránh mất data
@@ -319,22 +318,27 @@ Hậu quả: KHÔNG THỂ replay tháng 1–2
 
 ### Cheat sheet
 
-```
-╔═══════════════════════════════════════════════════════════════╗
-║  Kafka = COMMIT LOG, không phải database                      ║
-║  ───────────────────────────────────────────────────────────  ║
-║  • Append-only, đọc theo offset tuần tự                       ║
-║  • Không có WHERE / SELECT / UPDATE                           ║
-║  • Message cũ bị retention XÓA (mặc định 7 ngày)              ║
-║  ───────────────────────────────────────────────────────────  ║
-║  cleanup.policy:                                              ║
-║   • delete   → xóa theo thời gian (event log)                 ║
-║   • compact  → giữ bản cuối mỗi key (state/table)             ║
-║  ───────────────────────────────────────────────────────────  ║
-║  Cần data lâu? SINK XUỐNG database/S3 qua Kafka Connect.      ║
-║  Đừng dùng Kafka làm kho lưu trữ vĩnh viễn.                   ║
-╚═══════════════════════════════════════════════════════════════╝
-```
+<Callout type="info">
+
+Kafka = COMMIT LOG, không phải database
+
+- Append-only, đọc theo offset tuần tự
+
+- Không có WHERE / SELECT / UPDATE
+
+- Message cũ bị retention XÓA (mặc định 7 ngày)
+
+cleanup.policy:
+
+- delete   → xóa theo thời gian (event log)
+
+- compact  → giữ bản cuối mỗi key (state/table)
+
+Cần data lâu? SINK XUỐNG database/S3 qua Kafka Connect.
+
+Đừng dùng Kafka làm kho lưu trữ vĩnh viễn.
+
+</Callout>
 
 ### 3 nguyên tắc áp dụng ngay
 

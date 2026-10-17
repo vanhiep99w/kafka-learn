@@ -19,34 +19,41 @@ description: "Bảo mật Kafka trong production: SSL/TLS encryption, SASL authe
 
 ## Security Layers trong Kafka
 
-```
-┌─────────────────────────────────────────────────────────────────────────────────┐
-│                    KAFKA SECURITY MODEL                                         │
-├─────────────────────────────────────────────────────────────────────────────────┤
-│                                                                                 │
-│  Layer 1: ENCRYPTION (SSL/TLS)                                                  │
-│  ─────────────────────────────                                                  │
-│  • Data in transit được encrypt                                                 │
-│  • Prevent man-in-the-middle attacks                                            │
-│  • Client verifies broker identity                                              │
-│                                                                                 │
-│  Layer 2: AUTHENTICATION (SASL)                                                 │
-│  ─────────────────────────────                                                  │
-│  • "Who are you?" — Verify client identity                                      │
-│  • Options: PLAIN, SCRAM-SHA-256, GSSAPI (Kerberos), OAUTHBEARER                │
-│                                                                                 │
-│  Layer 3: AUTHORIZATION (ACL)                                                   │
-│  ─────────────────────────────                                                  │
-│  • "What can you do?" — Control access                                          │
-│  • Per-topic, per-group, per-user permissions                                   │
-│  • Operations: READ, WRITE, CREATE, DELETE, DESCRIBE                            │
-│                                                                                 │
-│  Common Combinations:                                                           │
-│  • Dev: No security (localhost only)                                            │
-│  • Staging: SASL_PLAINTEXT (auth without TLS — fast)                            │
-│  • Production: SASL_SSL (auth + encryption)                                     │
-└─────────────────────────────────────────────────────────────────────────────────┘
-```
+<Callout type="info">
+
+KAFKA SECURITY MODEL
+
+Layer 1: ENCRYPTION (SSL/TLS)
+
+- Data in transit được encrypt
+
+- Prevent man-in-the-middle attacks
+
+- Client verifies broker identity
+
+Layer 2: AUTHENTICATION (SASL)
+
+- "Who are you?" — Verify client identity
+
+- Options: PLAIN, SCRAM-SHA-256, GSSAPI (Kerberos), OAUTHBEARER
+
+Layer 3: AUTHORIZATION (ACL)
+
+- "What can you do?" — Control access
+
+- Per-topic, per-group, per-user permissions
+
+- Operations: READ, WRITE, CREATE, DELETE, DESCRIBE
+
+Common Combinations:
+
+- Dev: No security (localhost only)
+
+- Staging: SASL_PLAINTEXT (auth without TLS — fast)
+
+- Production: SASL_SSL (auth + encryption)
+
+</Callout>
 
 ---
 

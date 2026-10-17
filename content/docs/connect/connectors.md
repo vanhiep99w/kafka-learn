@@ -482,16 +482,22 @@ s3://my-data-lake/
 
 Khi dùng Avro converter + Schema Registry, Debezium tự động register schemas:
 
-```mermaid
-graph LR
-    DB[(PostgreSQL)] -->|"Change Event"| Debezium
-    Debezium -->|"Register Schema\n(first time)"| SR[Schema Registry]
-    SR -->|"Schema ID"| Debezium
-    Debezium -->|"Event: [ID + payload]"| K[Kafka Topic]
-    K -->|"Read Event"| Consumer
-    Consumer -->|"Fetch Schema by ID"| SR
-    SR -->|"Avro Schema"| Consumer
-    Consumer -->|"Deserialize"| App[Your App]
+```d2 title="Schema Evolution với Schema Registry"
+direction: right
+DB: "PostgreSQL" { shape: cylinder; icon: ../../assets/d2/postgresql.svg }
+Debezium: "Debezium"
+SR: "Schema Registry"
+K: "Kafka Topic"
+Consumer: "Consumer"
+App: "Your App"
+DB -> Debezium: "Change Event"
+Debezium -> SR: "Register Schema\n(first time)"
+SR -> Debezium: "Schema ID"
+Debezium -> K: "Event: [ID + payload]"
+K -> Consumer: "Read Event"
+Consumer -> SR: "Fetch Schema by ID"
+SR -> Consumer: "Avro Schema"
+Consumer -> App: "Deserialize"
 ```
 
 **Schema Compatibility Modes:**

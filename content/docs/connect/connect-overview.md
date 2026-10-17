@@ -23,25 +23,24 @@ description: "Kafka Connect là gì, kiến trúc Source/Sink connector, Worker 
 
 **Kafka Connect** là một **framework tích hợp dữ liệu** — nó tự động hóa việc di chuyển dữ liệu giữa Kafka và các hệ thống bên ngoài (Databases, S3, Elasticsearch, v.v.) **mà không cần viết code**.
 
-```
-┌─────────────────────────────────────────────────────────────────────────────────┐
-│                    KAFKA CONNECT IN THE ECOSYSTEM                               │
-├─────────────────────────────────────────────────────────────────────────────────┤
-│                                                                                 │
-│  External Systems ──────────────────────────────────── External Systems         │
-│  (Databases, APIs,          Kafka Connect              (Databases, S3,          │
-│   Files, Streams)   ─────────────────────────────────  Elasticsearch, ...)      │
-│                                                                                 │
-│  ┌──────────────┐   Source   ┌─────────────────────┐   Sink   ┌──────────────┐  │
-│  │  PostgreSQL  │ ─────────▶ │                     │ ───────▶ │ Elasticsearch│  │
-│  │  MySQL       │            │   Apache Kafka      │          │ AWS S3       │  │
-│  │  MongoDB     │            │   (Topics)          │          │ BigQuery     │  │
-│  │  REST API    │            │                     │          │ Snowflake    │  │
-│  │  CSV Files   │ ◀───────── │                     │ ◀─────── │ JDBC (any DB)│  │
-│  └──────────────┘   Sink     └─────────────────────┘  Source  └──────────────┘  │
-│                                                                                 │
-│  All without writing a single Producer or Consumer!                             │
-└─────────────────────────────────────────────────────────────────────────────────┘
+```d2 title="Kafka Connect trong hệ sinh thái"
+direction: right
+sources: "External systems" {
+  db: "PostgreSQL / MySQL / MongoDB"
+  input: "REST API / CSV files / streams"
+}
+kafka: "Apache Kafka\nTopics"
+sinks: "External systems" {
+  search: "Elasticsearch / AWS S3"
+  warehouse: "BigQuery / Snowflake / JDBC"
+}
+sources.db -> kafka: Source connector
+sources.input -> kafka: Source connector
+kafka -> sinks.search: Sink connector
+kafka -> sinks.warehouse: Sink connector
+kafka -> sources.db: Sink
+sinks.warehouse -> kafka: Source
+note: "Không cần tự viết Producer hoặc Consumer"
 ```
 
 **Kafka Connect = Plugin-based integration framework:**
@@ -75,15 +74,20 @@ description: "Kafka Connect là gì, kiến trúc Source/Sink connector, Worker 
 
 ### Source Connector — External → Kafka
 
-```mermaid
-graph LR
-    subgraph "Source Connector (e.g., Debezium PostgreSQL)"
-        DB[(PostgreSQL\nWAL/binlog)] -->|"CDC events"| SC[Source\nConnector]
-        SC -->|"Task 1"| T1[Worker Thread]
-        SC -->|"Task 2"| T2[Worker Thread]
-        T1 --> K[Kafka Topic\ndb.orders.changes]
-        T2 --> K
-    end
+```d2 title="Source Connector — External → Kafka"
+direction: right
+g1: "Source Connector (e.g., Debezium PostgreSQL)" {
+  DB: "PostgreSQL\nWAL/binlog" { shape: cylinder; icon: ../../assets/d2/postgresql.svg }
+  SC: "Source\nConnector"
+  T1: "Worker Thread"
+  T2: "Worker Thread"
+  K: "Kafka Topic\ndb.orders.changes"
+}
+g1.DB -> g1.SC: "CDC events"
+g1.SC -> g1.T1: "Task 1"
+g1.SC -> g1.T2: "Task 2"
+g1.T1 -> g1.K
+g1.T2 -> g1.K
 ```
 
 **Ví dụ các Source Connectors phổ biến:**
@@ -99,14 +103,18 @@ graph LR
 
 ### Sink Connector — Kafka → External
 
-```mermaid
-graph LR
-    subgraph "Sink Connector (e.g., Elasticsearch)"
-        K[Kafka Topic\norders-enriched] -->|"Task 1"| T1[Sink Task]
-        K -->|"Task 2"| T2[Sink Task]
-        T1 --> ES[(Elasticsearch\nIndex)]
-        T2 --> ES
-    end
+```d2 title="Sink Connector — Kafka → External"
+direction: right
+g1: "Sink Connector (e.g., Elasticsearch)" {
+  K: "Kafka Topic\norders-enriched"
+  T1: "Sink Task"
+  T2: "Sink Task"
+  ES: "Elasticsearch\nIndex" { shape: cylinder }
+}
+g1.K -> g1.T1: "Task 1"
+g1.K -> g1.T2: "Task 2"
+g1.T1 -> g1.ES
+g1.T2 -> g1.ES
 ```
 
 **Ví dụ các Sink Connectors phổ biến:**
@@ -125,30 +133,26 @@ graph LR
 
 ## Worker Architecture
 
-```
-┌─────────────────────────────────────────────────────────────────────────────────┐
-│                    KAFKA CONNECT WORKER INTERNALS                               │
-├─────────────────────────────────────────────────────────────────────────────────┤
-│                                                                                 │
-│  Worker Process (JVM):                                                          │
-│  ┌───────────────────────────────────────────────────────────────────────────┐  │
-│  │  Connector 1: Debezium PostgreSQL (Source)                                │  │
-│  │  ┌──────────────────┐  ┌──────────────────┐  ┌──────────────────┐         │  │
-│  │  │  Task 1          │  │  Task 2          │  │  Task 3          │         │  │
-│  │  │  Table: orders   │  │  Table: payments │  │  Table: users    │         │  │
-│  │  │  (polling WAL)   │  │  (polling WAL )  │  │  (polling WAL)   │         │  │
-│  │  └──────────┬───────┘  └──────────┬───────┘  └──────────┬───────┘         │  │
-│  │             │                     │                     │                 │  │
-│  │             └──────────┬──────────┘                     │                 │  │
-│  │                        ▼                                ▼                 │  │
-│  │             Kafka Producer API              Kafka Producer API            │  │
-│  └───────────────────────────────────────────────────────────────────────────┘  │
-│                                                                                 │
-│  Internal Topics (managed by Connect framework):                                │
-│  • connect-configs: Connector configurations                                    │
-│  • connect-offsets: Source connector offsets (what's been published)            │
-│  • connect-status:  Connector/task status                                       │
-└─────────────────────────────────────────────────────────────────────────────────┘
+```d2 title="Bên trong Kafka Connect Worker"
+direction: down
+worker: "Worker process (JVM)" {
+  icon: ../../assets/d2/java.svg
+  connector: "Debezium PostgreSQL — Source connector" {
+    t1: "Task 1\norders — polling WAL"
+    t2: "Task 2\npayments — polling WAL"
+    t3: "Task 3\nusers — polling WAL"
+    p1: Kafka Producer API
+    p2: Kafka Producer API
+    t1 -> p1
+    t2 -> p1
+    t3 -> p2
+  }
+}
+internal: "Internal topics — Connect framework quản lý" {
+  config: "connect-configs\nConnector configurations"
+  offsets: "connect-offsets\nSource connector offsets đã publish"
+  status: "connect-status\nConnector / task status"
+}
 ```
 
 **Offset management** cho Source Connectors:
@@ -203,31 +207,26 @@ key.converter.schema.registry.url=http://schema-registry:8081
 value.converter.schema.registry.url=http://schema-registry:8081
 ```
 
-```mermaid
-graph TB
-    subgraph "Distributed Connect Cluster (3 Workers)"
-        W1["Worker 1\nTask 1 (orders)\nTask 2 (payments)"]
-        W2["Worker 2\nTask 3 (users)"]
-        W3["Worker 3\n(standby/other tasks)"]
-
-        LB["Load Balancer\nREST API :8083"]
-
-        LB --> W1
-        LB --> W2
-        LB --> W3
-    end
-
-    subgraph "Kafka Cluster"
-        CT[connect-configs]
-        CO[connect-offsets]
-        CS[connect-status]
-    end
-
-    W1 --- CT
-    W2 --- CO
-    W3 --- CS
-
-    Note["If W1 fails → Tasks rebalanced to W2, W3 automatically"]
+```d2 title="Distributed Mode (Production)"
+direction: down
+g1: "Distributed Connect Cluster (3 Workers)" {
+  W1: "Worker 1\nTask 1 (orders)\nTask 2 (payments)"
+  W2: "Worker 2\nTask 3 (users)"
+  W3: "Worker 3\n(standby/other tasks)"
+  LB: "Load Balancer\nREST API :8083"
+}
+g2: "Kafka Cluster" {
+  CT: "connect-configs"
+  CO: "connect-offsets"
+  CS: "connect-status"
+}
+Note: "If W1 fails → Tasks rebalanced to W2, W3 automatically"
+g1.LB -> g1.W1
+g1.LB -> g1.W2
+g1.LB -> g1.W3
+g1.W1 -- g2.CT
+g1.W2 -- g2.CO
+g1.W3 -- g2.CS
 ```
 
 **Ưu điểm**: HA, horizontal scaling, REST API management, automatic task rebalancing.
@@ -323,20 +322,65 @@ curl -X PUT http://localhost:8083/connector-plugins/PostgresConnector/config/val
   -d '{ ... config ... }'
 ```
 
+Các exchange dưới đây là **response minh họa**, không phải kết quả gọi API trực tiếp. Worker ID và danh sách task phụ thuộc cluster thực tế; component không gửi HTTP request.
+
+```protocol-exchange
+title: Đọc trạng thái connector và tạm dừng
+variants:
+  - id: status
+    title: Connector và task đang RUNNING
+    request:
+      method: GET
+      url: http://localhost:8083/connectors/postgres-orders-source/status
+    response:
+      status: 200
+      statusText: OK
+      headers:
+        - id: content-type
+          name: Content-Type
+          value: application/json
+      body:
+        kind: json
+        json: |-
+          {
+            "name": "postgres-orders-source",
+            "connector": {"state": "RUNNING", "worker_id": "connect:8083"},
+            "tasks": [{"id": 0, "state": "RUNNING", "worker_id": "connect:8083"}],
+            "type": "source"
+          }
+  - id: pause
+    title: Pause được chấp nhận — cần kiểm tra lại status
+    request:
+      method: PUT
+      url: http://localhost:8083/connectors/postgres-orders-source/pause
+    response:
+      status: 202
+      statusText: Accepted
+```
+
+`202 Accepted` chỉ cho biết lệnh pause được chấp nhận; gọi lại endpoint `/status` để theo dõi trạng thái, không giả định mọi task đã dừng ngay.
+
 ---
 
 ## Connector Lifecycle
 
-```mermaid
-stateDiagram-v2
-    [*] --> UNASSIGNED: Connector created
-    UNASSIGNED --> RUNNING: Worker assigned + started
-    RUNNING --> PAUSED: Manual pause
-    PAUSED --> RUNNING: Manual resume
-    RUNNING --> FAILED: Error occurred
-    FAILED --> RUNNING: Manual restart
-    RUNNING --> STOPPED: Deleted
-    STOPPED --> [*]
+```d2 title="Connector Lifecycle"
+direction: right
+start: Bắt đầu { shape: circle }
+finish: Kết thúc { shape: circle }
+UNASSIGNED: "UNASSIGNED"
+RUNNING: "RUNNING"
+PAUSED: "PAUSED"
+FAILED: "FAILED"
+STOPPED: "STOPPED"
+start -> UNASSIGNED: "Connector created"
+UNASSIGNED -> RUNNING: "Worker assigned + started"
+RUNNING -> PAUSED: "Manual pause"
+PAUSED -> RUNNING: "Manual resume"
+RUNNING -> FAILED: "Error occurred"
+FAILED -> RUNNING: "Manual restart"
+RUNNING -> STOPPED: "Deleted"
+STOPPED -> finish
 ```
 
 **Task States:**
@@ -352,21 +396,25 @@ stateDiagram-v2
 
 ## Khi nào dùng Kafka Connect
 
-```mermaid
-flowchart TD
-    A[Cần integrate external system với Kafka?] --> B{Có connector available?}
-
-    B -->|Có| C{Cần custom business logic?}
-    B -->|Không| D["Tự viết Producer/Consumer\nhoặc Kafka Streams"]
-
-    C -->|Không - pure data movement| E["✅ Kafka Connect\nConfiguration only!"]
-    C -->|Có - nhưng nhỏ| F{SMT đủ không?}
-    C -->|Có - phức tạp| G["Custom Producer/Consumer\nhoặc Kafka Streams"]
-
-    F -->|Có| E
-    F -->|Không| G
-
-    E --> H["Benefits:\n• No code to maintain\n• Built-in offset mgmt\n• Auto-retry\n• Scaling via tasks"]
+```d2 title="Khi nào dùng Kafka Connect"
+direction: down
+A: "Cần integrate external system với Kafka?"
+B: "Có connector available?" { shape: diamond }
+C: "Cần custom business logic?" { shape: diamond }
+D: "Tự viết Producer/Consumer\nhoặc Kafka Streams"
+E: "✅ Kafka Connect\nConfiguration only!"
+F: "SMT đủ không?" { shape: diamond }
+G: "Custom Producer/Consumer\nhoặc Kafka Streams"
+H: "Benefits:\n• No code to maintain\n• Built-in offset mgmt\n• Auto-retry\n• Scaling via tasks"
+A -> B
+B -> C: "Có"
+B -> D: "Không"
+C -> E: "Không - pure data movement"
+C -> F: "Có - nhưng nhỏ"
+C -> G: "Có - phức tạp"
+F -> E: "Có"
+F -> G: "Không"
+E -> H
 ```
 
 **Checklist cho Kafka Connect:**

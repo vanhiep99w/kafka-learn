@@ -27,19 +27,22 @@ description: "Deep dive vào cơ chế lưu trữ offset trong Kafka: __consumer
 
 **Offset** là một số nguyên tăng dần, đánh dấu vị trí của mỗi message trong một partition. Đây là cơ chế Kafka dùng để các consumer biết "tôi đã đọc đến đâu".
 
-```
-┌───────────────────────────────────────────────────────────────┐
-│                     Partition 0 (Commit Log)                  │
-├─────┬─────┬─────┬─────┬─────┬─────┬─────┬─────┬─────┬─────┬───┤
-│ msg │ msg │ msg │ msg │ msg │ msg │ msg │ msg │ msg │ msg │ . │
-│  0  │  1  │  2  │  3  │  4  │  5  │  6  │  7  │  8  │  9  │ . │
-├─────┴─────┴─────┴─────┴─────┴─────┴─────┴─────┴─────┴─────┴───┤
-│  ↑                         ↑                               ↑  │
-│ Offset 0               Offset 5                    Latest (9) │
-│ (Oldest)           (Consumer Position)              (Newest)  │
-└───────────────────────────────────────────────────────────────┘
-
-Write Direction ────────────────────────────────────────────────→
+```d2 title="Offset là vị trí trong commit log"
+direction: right
+log: "Partition 0 — commit log" {
+  m0: "Offset 0\nOldest"
+  m1: "Offset 1"
+  m2: "Offset 2"
+  m3: "Offset 3"
+  m4: "Offset 4"
+  m5: "Offset 5\nConsumer position"
+  m6: "Offset 6"
+  m7: "Offset 7"
+  m8: "Offset 8"
+  m9: "Offset 9\nNewest record"
+  m0 -> m1 -> m2 -> m3 -> m4 -> m5 -> m6 -> m7 -> m8 -> m9: Append order
+}
+leo: "Log end offset (LEO): 10\nVị trí kế tiếp sau record cuối"
 ```
 
 **Consumer Lag** = Log End Offset - Current Offset (= số message chưa xử lý)
@@ -66,12 +69,11 @@ Kafka lưu toàn bộ offset của consumer trong một topic nội bộ đặc 
 
 Log compaction đảm bảo `__consumer_offsets` chỉ giữ **offset mới nhất** của mỗi `(group, topic, partition)`. Các offset cũ hơn sẽ bị cleanup dần.
 
-```
-Trước compaction:
-[key: (g1,orders,P0)→50] [key: (g1,orders,P0)→75] [key: (g1,orders,P0)→100]
-
-Sau compaction:
-[key: (g1,orders,P0)→100]  ← Chỉ giữ bản mới nhất
+```d2 title="Compaction trong __consumer_offsets"
+direction: right
+before: "Trước compaction — key (g1,orders,P0)" {a: "50"; b: "75"; c: "100"; a -> b -> c}
+after: "Sau compaction" {c: "(g1,orders,P0) → 100\nGiữ bản mới nhất"}
+before -> after
 ```
 
 ---
@@ -80,26 +82,17 @@ Sau compaction:
 
 ### Cấu trúc Key-Value trong `__consumer_offsets`
 
-```
-┌────────────────────────────────────────────────────────────────────────────┐
-│                     __consumer_offsets Internal Topic                      │
-├────────────────────────────────────────────────────────────────────────────┤
-│                                                                            │
-│  ┌─────────────────────────────────┐     ┌─────────────────────────────┐   │
-│  │ Key (Composite)                 │     │ Value                       │   │
-│  ├─────────────────────────────────┤     ├─────────────────────────────┤   │
-│  │ • Consumer Group ID             │ ──▶ │ • Committed Offset          │   │
-│  │ • Topic Name                    │     │ • Metadata (optional)       │   │
-│  │ • Partition Number              │     │ • Commit Timestamp          │   │
-│  └─────────────────────────────────┘     └─────────────────────────────┘   │
-│                                                                            │
-│  Ví dụ thực tế:                                                            │
-│  (order-group, orders, 0)  →  { offset: 1523, timestamp: ... }             │
-│  (order-group, orders, 1)  →  { offset: 892,  timestamp: ... }             │
-│  (order-group, orders, 2)  →  { offset: 2105, timestamp: ... }             │
-│  (analytics-group, orders, 0) → { offset: 500, timestamp: ... }            │
-│  (analytics-group, orders, 1) → { offset: 500, timestamp: ... }            │
-└────────────────────────────────────────────────────────────────────────────┘
+```d2 title="Key và value của committed offset"
+direction: right
+topic: "__consumer_offsets" {
+  key: "Composite key\nConsumer group ID\nTopic name\nPartition number"
+  value: "Value\nCommitted offset\nMetadata (optional)\nCommit timestamp"
+  key -> value
+  examples: "Ví dụ" {
+    a: "(order-group, orders, 0) → 1523\n(order-group, orders, 1) → 892\n(order-group, orders, 2) → 2105"
+    b: "(analytics-group, orders, 0) → 500\n(analytics-group, orders, 1) → 500"
+  }
+}
 ```
 
 **Key = `(group.id, topic, partition)`** — KHÔNG phải per consumer instance.
@@ -115,65 +108,56 @@ Sau compaction:
 
 ### Minh họa: Consumer crash, Group không mất dữ liệu
 
-```mermaid
-sequenceDiagram
-    participant C1 as Consumer C1 (order-group)
-    participant Kafka as Kafka Broker
-    participant C2 as Consumer C2 (order-group)
-
-    Note over C1,C2: Hoạt động bình thường
-    C1->>Kafka: Poll Partition 0
-    Kafka-->>C1: Messages offset 0-10
-    C1->>Kafka: Commit offset 10<br/>Key: (order-group, topic, P0)
-
-    Note over C1,C2: 💥 C1 Crash!
-
-    Note over C1,C2: Rebalance Triggered
-    C2->>Kafka: Được assigned Partition 0 — offset bắt đầu?
-    Kafka-->>C2: Lookup (order-group, topic, P0)<br/>Last committed: offset 10
-    C2->>Kafka: Poll từ offset 10
-    Kafka-->>C2: Messages offset 10-20
-
-    Note over C2: ✅ Không mất message!<br/>C2 tiếp tục từ nơi C1 dừng lại
+```d2 title="Minh họa: Consumer crash, Group không mất dữ liệu"
+shape: sequence_diagram
+C1: "Consumer C1 (order-group)"
+Kafka: "Kafka Broker"
+C2: "Consumer C2 (order-group)"
+C1.note1: "C1 / C2: Hoạt động bình thường"
+C1 -> Kafka: "Poll Partition 0"
+Kafka -> C1: "Messages offset 0-10" { style.stroke-dash: 4 }
+C1 -> Kafka: "Commit offset 10\nKey: (order-group, topic, P0)"
+C1.note2: "C1 / C2: 💥 C1 Crash!"
+C1.note3: "C1 / C2: Rebalance Triggered"
+C2 -> Kafka: "Được assigned Partition 0 — offset bắt đầu?"
+Kafka -> C2: "Lookup (order-group, topic, P0)\nLast committed: offset 10" { style.stroke-dash: 4 }
+C2 -> Kafka: "Poll từ offset 10"
+Kafka -> C2: "Messages offset 10-20" { style.stroke-dash: 4 }
+C2.note4: "✅ Không mất message!\nC2 tiếp tục từ nơi C1 dừng lại"
 ```
 
 ---
 
 ## Multiple Consumer Groups — Independent Offsets
 
-```mermaid
-graph TB
-    subgraph "Topic: orders (3 Partitions)"
-        P0["Partition 0\nMessages 0-100"]
-        P1["Partition 1\nMessages 0-100"]
-        P2["Partition 2\nMessages 0-100"]
-    end
-
-    subgraph "Group A: order-service"
-        CA1["Consumer A1"]
-        CA2["Consumer A2"]
-    end
-
-    subgraph "Group B: analytics-service"
-        CB1["Consumer B1"]
-    end
-
-    P0 --> CA1
-    P1 --> CA1
-    P2 --> CA2
-
-    P0 --> CB1
-    P1 --> CB1
-    P2 --> CB1
-
-    subgraph "__consumer_offsets"
-        OFF1["(order-service, orders, P0) → 85"]
-        OFF2["(order-service, orders, P1) → 92"]
-        OFF3["(order-service, orders, P2) → 78"]
-        OFF4["(analytics-service, orders, P0) → 45"]
-        OFF5["(analytics-service, orders, P1) → 45"]
-        OFF6["(analytics-service, orders, P2) → 45"]
-    end
+```d2 title="Multiple Consumer Groups — Independent Offsets"
+direction: down
+g1: "Topic: orders (3 Partitions)" {
+  P0: "Partition 0\nMessages 0-100"
+  P1: "Partition 1\nMessages 0-100"
+  P2: "Partition 2\nMessages 0-100"
+}
+g2: "Group A: order-service" {
+  CA1: "Consumer A1"
+  CA2: "Consumer A2"
+}
+g3: "Group B: analytics-service" {
+  CB1: "Consumer B1"
+}
+g4: "__consumer_offsets" {
+  OFF1: "(order-service, orders, P0) → 85"
+  OFF2: "(order-service, orders, P1) → 92"
+  OFF3: "(order-service, orders, P2) → 78"
+  OFF4: "(analytics-service, orders, P0) → 45"
+  OFF5: "(analytics-service, orders, P1) → 45"
+  OFF6: "(analytics-service, orders, P2) → 45"
+}
+g1.P0 -> g2.CA1
+g1.P1 -> g2.CA1
+g1.P2 -> g2.CA2
+g1.P0 -> g3.CB1
+g1.P1 -> g3.CB1
+g1.P2 -> g3.CB1
 ```
 
 **Lưu ý**: Group A ở offset ~85, Group B ở offset 45. Chúng tiến hoàn toàn độc lập!
@@ -182,29 +166,37 @@ graph TB
 
 ## Offset Commit Flow
 
-```mermaid
-flowchart LR
-    subgraph Consumer Application
-        A[Poll Messages] --> B[Process Messages]
-        B --> C{Commit Strategy?}
-    end
-
-    C -->|Auto-Commit| D[Background Thread<br/>Mỗi 5s mặc định]
-    C -->|Manual| E[Gọi ack.acknowledge]
-    C -->|Batch| F[Sau khi xử lý xong<br/>toàn bộ poll batch]
-
-    D --> G[Build OffsetCommitRequest]
-    E --> G
-    F --> G
-
-    G --> H["Gửi đến Group Coordinator<br/>(broker cụ thể)"]
-
-    subgraph Kafka Cluster
-        H --> I[Coordinator Broker]
-        I --> J["Ghi vào __consumer_offsets<br/>partition = hash(group.id) % 50"]
-        J --> K[Replicate đến Followers]
-        K --> L[Ack về Consumer]
-    end
+```d2 title="Offset Commit Flow"
+direction: right
+g1: "Consumer Application" {
+  A: "Poll Messages"
+  B: "Process Messages"
+  C: "Commit Strategy?" { shape: diamond }
+}
+g2: "Kafka Cluster" {
+  I: "Coordinator Broker"
+  J: "Ghi vào __consumer_offsets\npartition = hash(group.id) % 50"
+  K: "Replicate đến Followers"
+  L: "Ack về Consumer"
+}
+D: "Background Thread\nMỗi 5s mặc định"
+E: "Gọi ack.acknowledge"
+F: "Sau khi xử lý xong\ntoàn bộ poll batch"
+G: "Build OffsetCommitRequest"
+H: "Gửi đến Group Coordinator\n(broker cụ thể)"
+g1.A -> g1.B
+g1.B -> g1.C
+g1.C -> D: "Auto-Commit"
+g1.C -> E: "Manual"
+g1.C -> F: "Batch"
+D -> G
+E -> G
+F -> G
+G -> H
+H -> g2.I
+g2.I -> g2.J
+g2.J -> g2.K
+g2.K -> g2.L
 ```
 
 ---
@@ -213,124 +205,91 @@ flowchart LR
 
 ### Kịch bản 1: Consumer Crash
 
-```
-┌─────────────────────────────────────────────────────────────────────────────────┐
-│                    TRƯỚC: Hoạt động bình thường                                 │
-├─────────────────────────────────────────────────────────────────────────────────┤
-│                                                                                 │
-│   Topic: orders (4 Partitions)                                                  │
-│   ┌─────┐ ┌─────┐ ┌─────┐ ┌─────┐                                               │
-│   │ P0  │ │ P1  │ │ P2  │ │ P3  │                                               │
-│   └──┬──┘ └──┬──┘ └──┬──┘ └──┬──┘                                               │
-│      └───┬───┘       └───┬───┘                                                  │
-│          ▼               ▼                                                      │
-│     ┌─────────┐     ┌─────────┐                                                 │
-│     │Consumer │     │Consumer │   Consumer Group: order-group                   │
-│     │   C1    │     │   C2    │                                                 │
-│     │ P0, P1  │     │ P2, P3  │                                                 │
-│     └─────────┘     └─────────┘                                                 │
-│                                                                                 │
-│   Offsets:                                                                      │
-│   (order-group, orders, P0) → 150                                               │
-│   (order-group, orders, P1) → 200                                               │
-│   (order-group, orders, P2) → 175   ← C2 đang xử lý đến đây                     │
-│   (order-group, orders, P3) → 180   ← C2 đang xử lý đến đây                     │
-└─────────────────────────────────────────────────────────────────────────────────┘
-
-                              💥 C2 CRASH!
-
-┌─────────────────────────────────────────────────────────────────────────────────┐
-│                    SAU: Rebalance hoàn thành                                    │
-├─────────────────────────────────────────────────────────────────────────────────┤
-│                                                                                 │
-│   ┌─────┐ ┌─────┐ ┌─────┐ ┌─────┐                                               │
-│   │ P0  │ │ P1  │ │ P2  │ │ P3  │                                               │
-│   └──┬──┘ └──┬──┘ └──┬──┘ └──┬──┘                                               │
-│      └───────┴───────┴───────┘                                                  │
-│                    ▼                                                            │
-│               ┌─────────┐                                                       │
-│               │   C1    │   C1 nhận TẤT CẢ partitions                           │
-│               │P0,P1,P2,│                                                       │
-│               │   P3    │                                                       │
-│               └─────────┘                                                       │
-│                                                                                 │
-│   Offsets: (KHÔNG THAY ĐỔI! Offset được giữ nguyên)                             │
-│   (order-group, orders, P2) → 175  ← C1 tiếp tục TỪ ĐÂY                         │
-│   (order-group, orders, P3) → 180  ← C1 tiếp tục TỪ ĐÂY                         │
-└─────────────────────────────────────────────────────────────────────────────────┘
+```d2 mode=tabs title="Consumer crash — offset thuộc group không đổi"
+direction: down
+topic: "Topic: orders" {
+  p0: "P0\nOffset: 150"
+  p1: "P1\nOffset: 200"
+  p2: "P2\nOffset: 175"
+  p3: "P3\nOffset: 180"
+}
+c1: "Consumer 1"
+topic.p0 -> c1
+topic.p1 -> c1
+c2: "Consumer 2"
+topic.p2 -> c2
+topic.p3 -> c2
+scenarios: {
+  "Sau khi C2 crash": {
+    label: "C2 crash; C1 nhận tất cả partition"
+    (topic.p0 -> c1)[0]: null
+    (topic.p1 -> c1)[0]: null
+    (topic.p2 -> c2)[0]: null
+    (topic.p3 -> c2)[0]: null
+    c2: null
+    topic.p0 -> c1
+    topic.p1 -> c1
+    topic.p2 -> c1
+    topic.p3 -> c1
+  }
+}
+note: "Offsets của group không đổi: P0=150, P1=200, P2=175, P3=180"
 ```
 
 **Timeline của Consumer Crash:**
 
-```mermaid
-sequenceDiagram
-    participant C1 as Consumer C1
-    participant Coord as Group Coordinator
-    participant C2 as Consumer C2
-    participant Offsets as __consumer_offsets
-
-    Note over C1,C2: Hoạt động bình thường
-    C2->>Coord: Heartbeat ❤️
-    C2->>Coord: Heartbeat ❤️
-
-    Note over C2: 💥 C2 Crash!
-
-    C2--xCoord: Không có Heartbeat ❌
-
-    Note over Coord: Chờ session.timeout.ms<br/>(mặc định 45s)
-
-    Coord->>C1: Rebalance! Bạn nhận thêm P2, P3
-
-    C1->>Offsets: Offset của P2 là bao nhiêu?
-    Offsets-->>C1: (order-group, orders, P2) = 175
-
-    C1->>Offsets: Offset của P3 là bao nhiêu?
-    Offsets-->>C1: (order-group, orders, P3) = 180
-
-    Note over C1: ✅ Resume từ committed offsets
+```d2 title="Kịch bản 1: Consumer Crash"
+shape: sequence_diagram
+C1: "Consumer C1"
+Coord: "Group Coordinator"
+C2: "Consumer C2"
+Offsets: "__consumer_offsets"
+C1.note1: "C1 / C2: Hoạt động bình thường"
+C2 -> Coord: "Heartbeat ❤️"
+C2 -> Coord: "Heartbeat ❤️"
+C2.note2: "💥 C2 Crash!"
+C2 -> Coord: "✕ Không có Heartbeat ❌" { style.stroke-dash: 4; target-arrowhead.shape: cross }
+Coord.note3: "Chờ session.timeout.ms\n(mặc định 45s)"
+Coord -> C1: "Rebalance! Bạn nhận thêm P2, P3"
+C1 -> Offsets: "Offset của P2 là bao nhiêu?"
+Offsets -> C1: "(order-group, orders, P2) = 175" { style.stroke-dash: 4 }
+C1 -> Offsets: "Offset của P3 là bao nhiêu?"
+Offsets -> C1: "(order-group, orders, P3) = 180" { style.stroke-dash: 4 }
+C1.note4: "✅ Resume từ committed offsets"
 ```
 
 ---
 
 ### Kịch bản 2: Consumer Mới Gia Nhập
 
-```
-┌─────────────────────────────────────────────────────────────────────────────────┐
-│                    TRƯỚC: 1 Consumer đang xử lý                                 │
-├─────────────────────────────────────────────────────────────────────────────────┤
-│                                                                                 │
-│   ┌─────┐ ┌─────┐ ┌─────┐ ┌─────┐                                               │
-│   │ P0  │ │ P1  │ │ P2  │ │ P3  │                                               │
-│   │@100 │ │@150 │ │@200 │ │@175 │  ← Offset hiện tại                            │
-│   └──┬──┘ └──┬──┘ └──┬──┘ └──┬──┘                                               │
-│      └───────┴───────┴───────┘                                                  │
-│                  ▼                                                              │
-│             ┌─────────┐                                                         │
-│             │   C1    │   Đang xử lý tất cả 4 partitions                        │
-│             └─────────┘                                                         │
-└─────────────────────────────────────────────────────────────────────────────────┘
-
-                              🆕 C2 GIA NHẬP!
-
-┌─────────────────────────────────────────────────────────────────────────────────┐
-│                    SAU: Load được chia đều                                      │
-├─────────────────────────────────────────────────────────────────────────────────┤
-│                                                                                 │
-│   ┌─────┐ ┌─────┐ ┌─────┐ ┌─────┐                                               │
-│   │ P0  │ │ P1  │ │ P2  │ │ P3  │                                               │
-│   │@100 │ │@150 │ │@200 │ │@175 │  ← Offset KHÔNG THAY ĐỔI                      │
-│   └──┬──┘ └──┬──┘ └──┬──┘ └──┬──┘                                               │
-│      └───┬───┘       └───┬───┘                                                  │
-│          ▼               ▼                                                      │
-│     ┌─────────┐     ┌─────────┐                                                 │
-│     │   C1    │     │   C2    │                                                 │
-│     │ P0, P1  │     │ P2, P3  │                                                 │
-│     └─────────┘     └─────────┘                                                 │
-│                                                                                 │
-│   C2 bắt đầu P2 từ offset 200, P3 từ offset 175 (offset của GROUP!)             │
-│   ✅ C2 KHÔNG bắt đầu từ 0 — dùng committed offset của group                    │
-│                                                                                 │
-└─────────────────────────────────────────────────────────────────────────────────┘
+```d2 mode=tabs title="Consumer gia nhập — resume từ offset của group"
+direction: down
+topic: "Topic: orders" {
+  p0: "P0\nOffset: 100"
+  p1: "P1\nOffset: 150"
+  p2: "P2\nOffset: 200"
+  p3: "P3\nOffset: 175"
+}
+c1: "Consumer 1"
+topic.p0 -> c1
+topic.p1 -> c1
+topic.p2 -> c1
+topic.p3 -> c1
+scenarios: {
+  "Sau khi C2 gia nhập": {
+    label: "C2 gia nhập; C1 giữ P0,P1; C2 nhận P2,P3"
+    (topic.p0 -> c1)[0]: null
+    (topic.p1 -> c1)[0]: null
+    (topic.p2 -> c1)[0]: null
+    (topic.p3 -> c1)[0]: null
+    c2: "Consumer 2 — nhận P2 từ 200, P3 từ 175"
+    topic.p0 -> c1
+    topic.p1 -> c1
+    topic.p2 -> c2
+    topic.p3 -> c2
+  }
+}
+note: "Offsets của group không đổi: P0=100, P1=150, P2=200, P3=175"
 ```
 
 **Hiểu đúng**: Khi C2 gia nhập:
@@ -350,143 +309,140 @@ sequenceDiagram
 | **Trigger Rebalance** | Ngay lập tức | Sau khi timeout |
 | **Offset Impact** | Last offset được commit, preserved | Last committed offset preserved |
 
-```mermaid
-flowchart TD
-    subgraph "Graceful Shutdown"
-        A1[Consumer gọi close] --> A2[Commit pending offsets]
-        A2 --> A3[Gửi LeaveGroup đến Coordinator]
-        A3 --> A4[Rebalance ngay lập tức]
-        A4 --> A5["✅ Không mất message\n✅ Không duplicate"]
-    end
-
-    subgraph "Crash"
-        B1["💥 Process killed/OOM/Network"] --> B2[Không gửi heartbeat]
-        B2 --> B3["Chờ session.timeout.ms\n(45 giây)"]
-        B3 --> B4[Coordinator đánh dấu consumer dead]
-        B4 --> B5[Rebalance được trigger]
-        B5 --> B6["⚠️ Uncommitted messages\nsẽ bị reprocess"]
-    end
+```d2 title="Kịch bản 3: Graceful Shutdown vs Crash"
+direction: down
+g1: "Graceful Shutdown" {
+  A1: "Consumer gọi close"
+  A2: "Commit pending offsets"
+  A3: "Gửi LeaveGroup đến Coordinator"
+  A4: "Rebalance ngay lập tức"
+  A5: "✅ Không mất message\n✅ Không duplicate"
+}
+g2: "Crash" {
+  B1: "💥 Process killed/OOM/Network"
+  B2: "Không gửi heartbeat"
+  B3: "Chờ session.timeout.ms\n(45 giây)"
+  B4: "Coordinator đánh dấu consumer dead"
+  B5: "Rebalance được trigger"
+  B6: "⚠️ Uncommitted messages\nsẽ bị reprocess"
+}
+g1.A1 -> g1.A2
+g1.A2 -> g1.A3
+g1.A3 -> g1.A4
+g1.A4 -> g1.A5
+g2.B1 -> g2.B2
+g2.B2 -> g2.B3
+g2.B3 -> g2.B4
+g2.B4 -> g2.B5
+g2.B5 -> g2.B6
 ```
 
 ---
 
 ### Kịch bản 4: Tất cả Consumer Rời Đi
 
-```
-┌─────────────────────────────────────────────────────────────────────────────────┐
-│                    TẤT CẢ CONSUMER RỜI ĐI                                       │
-├─────────────────────────────────────────────────────────────────────────────────┤
-│                                                                                 │
-│   Topic: orders (4 Partitions)                                                  │
-│   ┌─────┐ ┌─────┐ ┌─────┐ ┌─────┐                                               │
-│   │ P0  │ │ P1  │ │ P2  │ │ P3  │   Không có consumer nào!                      │
-│   └─────┘ └─────┘ └─────┘ └─────┘                                               │
-│                                                                                 │
-│   __consumer_offsets: VẪN CÒN TỒN TẠI!                                          │
-│   (order-group, orders, P0) → offset: 500                                       │
-│   (order-group, orders, P1) → offset: 600                                       │
-│   (order-group, orders, P2) → offset: 550                                       │
-│   (order-group, orders, P3) → offset: 580                                       │
-│                                                                                 │
-│   Offset được giữ trong: offsets.retention.minutes (mặc định: 7 ngày)           │
-└─────────────────────────────────────────────────────────────────────────────────┘
-
-                    ⏰ 3 ngày sau... Consumer mới start
-
-┌─────────────────────────────────────────────────────────────────────────────────┐
-│                    CONSUMER MỚI VỚI CÙNG GROUP ID                               │
-├─────────────────────────────────────────────────────────────────────────────────┤
-│                                                                                 │
-│   ┌─────┐ ┌─────┐ ┌─────┐ ┌─────┐                                               │
-│   │ P0  │ │ P1  │ │ P2  │ │ P3  │                                               │
-│   │@500 │ │@600 │ │@550 │ │@580 │  ← Resume từ stored offset!                   │
-│   └──┬──┘ └──┬──┘ └──┬──┘ └──┬──┘                                               │
-│      └───────┴───────┴───────┘                                                  │
-│                  ▼                                                              │
-│             ┌─────────┐                                                         │
-│             │ C1 MỚI  │   Dùng group.id = "order-group"                         │
-│             └─────────┘                                                         │
-│                                                                                 │
-│   ✅ Tiếp tục từ offset 500, 600, 550, 580 — không reprocess!                   │
-└─────────────────────────────────────────────────────────────────────────────────┘
+```d2 mode=tabs title="Consumer trở lại trước khi offset hết retention"
+direction: down
+topic: "Topic: orders" {
+  p0: "P0\nOffset: 500"
+  p1: "P1\nOffset: 600"
+  p2: "P2\nOffset: 550"
+  p3: "P3\nOffset: 580"
+}
+scenarios: {
+  "Sau 3 ngày — consumer mới": {
+    label: "Sau 3 ngày: consumer mới cùng group.id=order-group resume"
+    c1: "Consumer mới — order-group"
+    topic.p0 -> c1
+    topic.p1 -> c1
+    topic.p2 -> c1
+    topic.p3 -> c1
+  }
+}
+note: "Offsets của group không đổi: P0=500, P1=600, P2=550, P3=580"
+retention: "Offset vẫn tồn tại khi group trống\nVí dụ retention 7 ngày (offsets.retention.minutes)"
 ```
 
 **Vòng đời Offset Retention:**
 
-```mermaid
-timeline
-    title Vòng đời Offset khi tất cả Consumer rời đi
-
-    Ngày 0 : Consumer cuối cùng rời đi
-           : Offset được lưu trong __consumer_offsets
-    Ngày 1-6 : Offset vẫn còn hợp lệ
-             : Consumer mới có thể resume
-    Ngày 7 : offsets.retention.minutes hết hạn
-           : Offset được xóa
-    Sau Ngày 7 : Consumer mới join
-              : auto.offset.reset quyết định điểm bắt đầu
+```d2 title="Kịch bản 4: Tất cả Consumer Rời Đi"
+direction: right
+departed: "Ngày 0\nConsumer cuối cùng rời đi\nOffset lưu trong __consumer_offsets"
+retained: "Ngày 1–6\nOffset còn hợp lệ\nConsumer mới có thể resume"
+expired: "Ngày 7\noffsets.retention.minutes hết hạn\nOffset được xóa"
+reset: "Sau ngày 7\nConsumer mới join\nauto.offset.reset chọn điểm bắt đầu"
+departed -> retained -> expired -> reset
 ```
 
 ---
 
 ### Kịch bản 5: Consumer Group Mới (Chưa từng consume)
 
-```mermaid
-flowchart TD
-    A["Consumer mới start\ngroup.id = 'new-analytics-group'"] --> B{Offset tồn tại trong<br/>__consumer_offsets?}
-
-    B -->|"❌ Không (lần đầu)"| C{auto.offset.reset?}
-
-    C -->|earliest| D["Bắt đầu từ offset 0\nXử lý TẤT CẢ messages"]
-    C -->|latest| E["Bắt đầu từ cuối log\nBỏ qua tất cả messages cũ"]
-    C -->|none| F["Ném Exception!\nNoOffsetForPartitionException"]
-
-    B -->|"✅ Có (đã từng chạy)"| G["Resume từ committed offset"]
+```d2 title="Kịch bản 5: Consumer Group Mới (Chưa từng consume)"
+direction: down
+A: "Consumer mới start\ngroup.id = 'new-analytics-group'"
+B: "Offset tồn tại trong\n__consumer_offsets?" { shape: diamond }
+C: "auto.offset.reset?" { shape: diamond }
+D: "Bắt đầu từ offset 0\nXử lý TẤT CẢ messages"
+E: "Bắt đầu từ cuối log\nBỏ qua tất cả messages cũ"
+F: "Ném Exception!\nNoOffsetForPartitionException"
+G: "Resume từ committed offset"
+A -> B
+B -> C: "❌ Không (lần đầu)"
+C -> D: "earliest"
+C -> E: "latest"
+C -> F: "none"
+B -> G: "✅ Có (đã từng chạy)"
 ```
 
 **Ví dụ thực tế: Hai group khác nhau:**
 
-```
-Topic: orders (Messages 0-1000 tồn tại)
-
-Group A: "order-processing-group" (đã chạy nhiều tuần)
-  → Current offset: 950 → Tiếp tục từ 950
-
-Group B: "new-analytics-group" (mới tạo, chưa chạy bao giờ)
-  → Không có offset trong __consumer_offsets
-
-  Nếu auto.offset.reset=earliest → Bắt đầu từ 0 (xử lý tất cả 1000 messages)
-  Nếu auto.offset.reset=latest   → Bắt đầu từ 1000 (chờ messages mới)
+```d2 title="Group cũ resume, group mới dùng auto.offset.reset"
+direction: right
+topic: "orders\nLog end offset = 1000"
+old: "Group A — order-processing-group\nCommitted offset 950 → tiếp tục từ 950"
+new: "Group B — new-analytics-group\nChưa có committed offset" {shape: diamond}
+early: "earliest → offset 0\nĐọc lịch sử còn được giữ lại"
+latest: "latest → offset 1000\nChờ message mới"
+topic -> old
+topic -> new
+new -> early
+new -> latest
 ```
 
 ---
 
 ## State Machine: Vòng Đời Consumer
 
-```mermaid
-stateDiagram-v2
-    [*] --> NoOffset: Group ID mới
-
-    NoOffset --> ProcessFromEarliest: auto.offset.reset=earliest
-    NoOffset --> ProcessFromLatest: auto.offset.reset=latest
-    NoOffset --> Error: auto.offset.reset=none
-
-    ProcessFromEarliest --> Consuming: Bắt đầu từ offset 0
-    ProcessFromLatest --> Consuming: Bắt đầu từ LOG_END
-
-    Consuming --> OffsetCommitted: Commit offset
-    OffsetCommitted --> Consuming: Tiếp tục xử lý
-
-    Consuming --> Rebalancing: Consumer join/leave
-    OffsetCommitted --> Rebalancing: Consumer join/leave
-
-    Rebalancing --> Consuming: Resume từ committed offset
-
-    Consuming --> AllConsumersGone: Consumer cuối cùng rời
-    AllConsumersGone --> OffsetsRetained: Offset được giữ
-    OffsetsRetained --> Consuming: Consumer mới join (cùng group)
-    OffsetsRetained --> OffsetsExpired: Sau retention period
-    OffsetsExpired --> NoOffset: Xử lý như group mới
+```d2 title="State Machine: Vòng Đời Consumer"
+direction: right
+start: Bắt đầu { shape: circle }
+NoOffset: "NoOffset"
+ProcessFromEarliest: "ProcessFromEarliest"
+ProcessFromLatest: "ProcessFromLatest"
+Error: "Error"
+Consuming: "Consuming"
+OffsetCommitted: "OffsetCommitted"
+Rebalancing: "Rebalancing"
+AllConsumersGone: "AllConsumersGone"
+OffsetsRetained: "OffsetsRetained"
+OffsetsExpired: "OffsetsExpired"
+start -> NoOffset: "Group ID mới"
+NoOffset -> ProcessFromEarliest: "auto.offset.reset=earliest"
+NoOffset -> ProcessFromLatest: "auto.offset.reset=latest"
+NoOffset -> Error: "auto.offset.reset=none"
+ProcessFromEarliest -> Consuming: "Bắt đầu từ offset 0"
+ProcessFromLatest -> Consuming: "Bắt đầu từ LOG_END"
+Consuming -> OffsetCommitted: "Commit offset"
+OffsetCommitted -> Consuming: "Tiếp tục xử lý"
+Consuming -> Rebalancing: "Consumer join/leave"
+OffsetCommitted -> Rebalancing: "Consumer join/leave"
+Rebalancing -> Consuming: "Resume từ committed offset"
+Consuming -> AllConsumersGone: "Consumer cuối cùng rời"
+AllConsumersGone -> OffsetsRetained: "Offset được giữ"
+OffsetsRetained -> Consuming: "Consumer mới join (cùng group)"
+OffsetsRetained -> OffsetsExpired: "Sau retention period"
+OffsetsExpired -> NoOffset: "Xử lý như group mới"
 ```
 
 ---
@@ -536,16 +492,28 @@ kafka-consumer-groups.sh --bootstrap-server localhost:9092 \
 
 **Consumer Lag** = số message mà consumer chưa xử lý được.
 
-```mermaid
-graph LR
-    subgraph "Partition 0 Commit Log"
-        M0[msg 0] --> M1[msg 1] --> M2[msg 2] --> M3[msg 3] --> M4[msg 4] --> M5[msg 5] --> M6[msg 6]
-    end
-
-    CURR["Current Offset: 3<br/>(Last Committed)"] -.-> M3
-    LEO["Log End Offset: 7<br/>(Latest Available)"] -.-> M6
-
-    LAG["📊 LAG = LEO - Current<br/>= 7 - 3 = 4 messages chưa xử lý"]
+```d2 title="Consumer Lag"
+direction: right
+g1: "Partition 0 Commit Log" {
+  M0: "msg 0"
+  M1: "msg 1"
+  M2: "msg 2"
+  M3: "msg 3"
+  M4: "msg 4"
+  M5: "msg 5"
+  M6: "msg 6"
+}
+CURR: "Current Offset: 3\n(Last Committed)"
+LEO: "Log End Offset: 7\n(Latest Available)"
+LAG: "📊 LAG = LEO - Current\n= 7 - 3 = 4 messages chưa xử lý"
+g1.M0 -> g1.M1
+g1.M1 -> g1.M2
+g1.M2 -> g1.M3
+g1.M3 -> g1.M4
+g1.M4 -> g1.M5
+g1.M5 -> g1.M6
+CURR -> g1.M3 { style.stroke-dash: 4 }
+LEO -> g1.M6 { style.stroke-dash: 4 }
 ```
 
 ### Giải thích Lag
@@ -603,18 +571,25 @@ kafka-consumer-groups.sh --bootstrap-server localhost:9092 \
 
 **Flowchart chọn Reset Strategy:**
 
-```mermaid
-flowchart TD
-    A[Cần Reset Offset] --> B{Lý do?}
-
-    B -->|Bug fix - cần reprocess| C[--to-earliest<br/>hoặc --to-datetime]
-    B -->|Bỏ qua message bị lỗi| D[--to-offset N+1<br/>hoặc --shift-by 1]
-    B -->|Consumer mới, bỏ qua lịch sử| E[--to-latest]
-    B -->|Replay N giờ gần đây| F[--to-datetime<br/>YYYY-MM-DDTHH:MM:SS]
-
-    C --> G{Processing idempotent?}
-    G -->|Có| H["✅ An toàn để reprocess"]
-    G -->|Không| I["⚠️ Nguy cơ side effects!\nVD: double billing"]
+```d2 title="Reset Offset Strategies"
+direction: down
+A: "Cần Reset Offset"
+B: "Lý do?" { shape: diamond }
+C: "--to-earliest\nhoặc --to-datetime"
+D: "--to-offset N+1\nhoặc --shift-by 1"
+E: "--to-latest"
+F: "--to-datetime\nYYYY-MM-DDTHH:MM:SS"
+G: "Processing idempotent?" { shape: diamond }
+H: "✅ An toàn để reprocess"
+I: "⚠️ Nguy cơ side effects!\nVD: double billing"
+A -> B
+B -> C: "Bug fix - cần reprocess"
+B -> D: "Bỏ qua message bị lỗi"
+B -> E: "Consumer mới, bỏ qua lịch sử"
+B -> F: "Replay N giờ gần đây"
+C -> G
+G -> H: "Có"
+G -> I: "Không"
 ```
 
 ---

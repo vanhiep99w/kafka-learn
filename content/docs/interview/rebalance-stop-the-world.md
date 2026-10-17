@@ -60,22 +60,20 @@ Trước khi nói "vì sao rebalance làm đứng", phải hiểu rebalance là 
 
 Khi một trong 3 trường hợp trên xảy ra, Kafka thực hiện 3 bước:
 
-```mermaid
-sequenceDiagram
-    participant C1 as Consumer 1
-    participant C2 as Consumer 2 (mới start)
-    participant Coord as Group Coordinator
-
-    Note over C2: C2 muốn gia nhập group
-    C2->>Coord: JoinGroup (tôi muốn vào)
-    C1->>Coord: JoinGroup (bị trigger phải tham gia)
-    Coord-->>C1: Bạn là Leader! Members: [C1, C2]
-    Coord-->>C2: Đợi...
-
-    Note over C1: C1 tính toán lại assignment
-    C1->>Coord: SyncGroup (C1=[P0,P1], C2=[P2,P3])
-    Coord-->>C1: OK
-    Coord-->>C2: Assignment: [P2, P3]
+```d2 title="Giao thức rebalance 3 bước"
+shape: sequence_diagram
+C1: "Consumer 1"
+C2: "Consumer 2 (mới start)"
+Coord: "Group Coordinator"
+C2.note1: "C2 muốn gia nhập group"
+C2 -> Coord: "JoinGroup (tôi muốn vào)"
+C1 -> Coord: "JoinGroup (bị trigger phải tham gia)"
+Coord -> C1: "Bạn là Leader! Members: [C1, C2]" { style.stroke-dash: 4 }
+Coord -> C2: "Đợi..." { style.stroke-dash: 4 }
+C1.note2: "C1 tính toán lại assignment"
+C1 -> Coord: "SyncGroup (C1=[P0,P1], C2=[P2,P3])"
+Coord -> C1: "OK" { style.stroke-dash: 4 }
+Coord -> C2: "Assignment: [P2, P3]" { style.stroke-dash: 4 }
 ```
 
 **Bước 1 — JoinGroup:** Tất cả consumer gửi "tôi muốn tham gia". Coordinator (một broker) chọn ra một consumer làm **Leader** (thường là consumer đầu tiên).
@@ -95,25 +93,17 @@ sequenceDiagram
 
 Khi rebalance trigger, **toàn bộ consumer trong group đồng loạt dừng xử lý**. Hình dung timeline:
 
-```
-Trước rebalance:
-   C1 đang xử lý P0, P1   (đang xử lý message thứ 50)
-   C2 đang xử lý P2, P3   (đang xử lý message thứ 80)
-
-   T0: C3 mới start → rebalance trigger
-   ─────────────────────────────────────
-   T1: Coordinator yêu cầu tất cả "revoke partition"
-   T2: ─── STOP-THE-WORLD ───
-       C1 phải dừng xử lý P0, P1 (commit offset, buông tay)
-       C2 phải dừng xử lý P2, P3 (commit offset, buông tay)
-       C3 chưa có gì
-       → KHÔNG AI xử lý gì trong khoảng này!
-   ─────────────────────────────────────
-   T3: C1 (Leader) tính assignment mới: C1=[P0], C2=[P1], C3=[P2,P3]
-   T4: Coordinator broadcast, mọi consumer nhận assignment
-   T5: Mỗi consumer "seek" về committed offset, bắt đầu poll lại
-   ─────────────────────────────────────
-   T6: ─── XỬ LÝ TIẾP ───
+```d2 title="Các pha eager rebalance"
+direction: right
+before: "Trước rebalance\nC1: P0,P1 — message 50\nC2: P2,P3 — message 80"
+t0: T0 — C3 join
+t1: T1 — Coordinator yêu cầu revoke
+t2: "T2 — STOP-THE-WORLD\nC1, C2 commit rồi buông partition\nC3 chưa có gì — không ai xử lý"
+t3: "T3 — C1 leader tính assignment\nC1=P0, C2=P1, C3=P2,P3"
+t4: T4 — Coordinator broadcast assignment
+t5: T5 — Seek committed offset và poll
+t6: T6 — Xử lý tiếp
+before -> t0 -> t1 -> t2 -> t3 -> t4 -> t5 -> t6
 ```
 
 Trong khoảng T2–T5, **không một message nào được xử lý**. Đó là "đứng".
@@ -137,11 +127,17 @@ Vì lý do **an toàn**: nếu không dừng, có nguy cơ **hai consumer cùng 
 - Bước 3: Leader tính assignment mới
 - Bước 4: Mọi consumer **assign (nhận)** partition mới
 
-```
-Eager:    C1 buông P0,P1 ─┐
-          C2 buông P2,P3 ─┤ ← khoảng dead time (không ai xử lý)
-          C3 (chưa có)    ─┘
-          → chia lại: C1=[P0], C2=[P1], C3=[P2,P3]
+```d2 title="Eager — revoke toàn bộ"
+direction: right
+before: "C3 mới join\nC1 giữ P0,P1; C2 giữ P2,P3"
+stop: "Eager — revoke toàn bộ" {
+  c1: C1 revoke P0,P1
+  c2: C2 revoke P2,P3
+  c3: C3 chưa có partition
+}
+wait: "STOP toàn group\nVí dụ dead time ~30s"
+after: "Assignment mới\nC1=[P0], C2=[P1], C3=[P2,P3]"
+before -> stop -> wait -> after
 ```
 
 Vấn đề: ngay cả khi partition **không đổi chủ** (vd P0 vẫn thuộc C1), C1 vẫn phải buông rồi nhận lại → vẫn dừng xử lý trong lúc đó.
@@ -151,13 +147,13 @@ Vấn đề: ngay cả khi partition **không đổi chủ** (vd P0 vẫn thuộ
 - Bước 2: Chỉ revoke những partition cần chuyển
 - Bước 3: Assign cho consumer mới
 
-```
-Cooperative: C3 mới join
-   C1 vẫn giữ P0, P1 (không dừng!)
-   C2 vẫn giữ P2 (không dừng!)
-   → chỉ C2 revoke P3 (partition cần chuyển)
-   → C3 nhận P3
-   → dead time chỉ cho P3, các partition khác liên tục
+```d2 title="Cooperative — chỉ di chuyển partition cần đổi"
+direction: right
+join: C3 mới join
+running: "Không dừng" {c1: C1 giữ P0,P1; c2: C2 giữ P2}
+move: "Chỉ P3 tạm dừng" {c2: C2 revoke P3; c3: C3 nhận P3; c2 -> c3: Di chuyển P3}
+join -> running
+join -> move
 ```
 
 > [!TIP]
@@ -181,17 +177,69 @@ Một lần rebalance (eager) không kết thúc trong chớp mắt — nó gồ
 
 Một lần rebalance 30 giây là chấp nhận được (vd deploy 1 lần/tuần). Nhưng nếu rebalance xảy ra **liên tục** — gọi là **rebalance storm** — thì group gần như không xử lý được gì:
 
-```
-Rebalance storm (mỗi 1 phút rebalance 1 lần):
-   phút 0:   rebalance → đứng 30s → xử lý 30s
-   phút 1:   rebalance → đứng 30s → xử lý 30s
-   phút 2:   rebalance → đứng 30s → xử lý 30s
-   ...
+Ví dụ tổng hợp: mỗi phút mất 30 giây cho rebalance rồi chỉ xử lý được 30 giây. Đây không phải trace đo thực tế hay benchmark Kafka.
 
-   → throughput thực tế = 50% lý thuyết
-   → lag tăng đều
-   → nếu processing time dài, mỗi cycle processing chưa xong đã rebalance tiếp
+```span-waterfall
+title: Rebalance storm — một nửa thời gian không xử lý
+unit: s
+provenance:
+  kind: illustrative
+  description: Ba chu kỳ giả định, mỗi chu kỳ 60 giây; 30 giây rebalance và 30 giây xử lý. Không phải số đo production.
+spans:
+  - id: cycle-0
+    name: Phút 0
+    service: consumer-group
+    start: 0
+    duration: 60
+  - id: rebalance-0
+    parent: cycle-0
+    name: Rebalance — không xử lý
+    service: coordinator
+    start: 0
+    duration: 30
+  - id: process-0
+    parent: cycle-0
+    name: Xử lý message
+    service: consumer
+    start: 30
+    duration: 30
+  - id: cycle-1
+    name: Phút 1
+    service: consumer-group
+    start: 60
+    duration: 60
+  - id: rebalance-1
+    parent: cycle-1
+    name: Rebalance — không xử lý
+    service: coordinator
+    start: 60
+    duration: 30
+  - id: process-1
+    parent: cycle-1
+    name: Xử lý message
+    service: consumer
+    start: 90
+    duration: 30
+  - id: cycle-2
+    name: Phút 2
+    service: consumer-group
+    start: 120
+    duration: 60
+  - id: rebalance-2
+    parent: cycle-2
+    name: Rebalance — không xử lý
+    service: coordinator
+    start: 120
+    duration: 30
+  - id: process-2
+    parent: cycle-2
+    name: Xử lý message
+    service: consumer
+    start: 150
+    duration: 30
 ```
+
+Trong mô hình trên, throughput còn khoảng 50% nếu các điều kiện khác không đổi. Với processing time dài, một batch có thể chưa xong thì rebalance tiếp, khiến lag tăng nhanh hơn.
 
 > [!WARNING]
 > Rebalance storm là một trong những nguyên nhân gây lag tăng đột biến khó chẩn đoán nhất. Bề ngoài consumer có vẻ "đang chạy" (CPU hoạt động), nhưng thực ra nó liên tục buông tay rồi nhận lại partition mà không xử lý được bao nhiêu message.
@@ -200,17 +248,27 @@ Rebalance storm (mỗi 1 phút rebalance 1 lần):
 
 ## 7. 4 Nguyên nhân trigger rebalance liên tục
 
-```mermaid
-flowchart TD
-    A["Rebalance trigger"] --> B{Nguyên nhân?}
-    B -->|"C1"| C["Consumer crash / mất heartbeat<br/>(session.timeout.ms hết hạn)"]
-    B -->|"C2"| D["Processing time > max.poll.interval.ms<br/>(Kafka tưởng consumer chết)"]
-    B -->|"C3"| E["Deploy / autoscale / rolling restart"]
-    B -->|"C4"| F["GC pause dài / network glitch"]
-    C --> G["➡ Fix health, tăng session.timeout.ms"]
-    D --> H["➡ Giảm max.poll.records / tăng max.poll.interval.ms"]
-    E --> I["➡ Static membership"]
-    F --> J["➡ Tune GC, network retry"]
+```d2 title="7. 4 Nguyên nhân trigger rebalance liên tục"
+direction: down
+A: "Rebalance trigger"
+B: "Nguyên nhân?" { shape: diamond }
+C: "Consumer crash / mất heartbeat\n(session.timeout.ms hết hạn)"
+D: "Processing time > max.poll.interval.ms\n(Kafka tưởng consumer chết)"
+E: "Deploy / autoscale / rolling restart"
+F: "GC pause dài / network glitch"
+G: "➡ Fix health, tăng session.timeout.ms"
+H: "➡ Giảm max.poll.records / tăng max.poll.interval.ms"
+I: "➡ Static membership"
+J: "➡ Tune GC, network retry"
+A -> B
+B -> C: "C1"
+B -> D: "C2"
+B -> E: "C3"
+B -> F: "C4"
+C -> G
+D -> H
+E -> I
+F -> J
 ```
 
 ### Chi tiết từng nguyên nhân
@@ -226,11 +284,16 @@ flowchart TD
 
 Đây là nguyên nhân số một gây rebalance storm. Consumer **có vẻ đang chạy** (CPU bận xử lý), nhưng vì xử lý quá lâu, không kịp gọi `poll()` → Kafka tưởng consumer chết → trigger rebalance → consumer xử lý xong gọi poll → "tôi không còn partition" → join lại → rebalance tiếp.
 
-```
-Vòng lặp xấu:
-   poll() → xử lý chậm → vượt max.poll.interval → rebalance
-   → partition bị thu hồi → consumer xử lý xong → poll() không có gì
-   → re-join → lại poll() → lại xử lý chậm → ...
+```d2 title="Vòng lặp poll timeout và rejoin"
+direction: right
+poll: poll()
+process: Xử lý chậm
+timeout: Vượt max.poll.interval.ms
+rebalance: Rebalance
+revoke: Partition bị thu hồi
+finish: Xử lý xong — poll không còn assignment
+join: Rejoin group
+poll -> process -> timeout -> rebalance -> revoke -> finish -> join -> poll
 ```
 
 Giải pháp: giảm `max.poll.records` (batch nhỏ hơn → xử lý xong nhanh hơn) hoặc tăng `max.poll.interval.ms` (cho phép batch lớn hơn). Ưu tiên cái đầu.
@@ -247,16 +310,20 @@ Khi consumer restart (deploy, autoscale), nó gửi `LeaveGroup` → trigger reb
 
 Static membership gán cho mỗi consumer một **ID cố định** (`group.instance.id`). Khi consumer rời group (restart), Kafka **không lập tức rebalance** — nó giữ nguyên partition assignment cho ID đó trong `session.timeout.ms`. Nếu consumer restart lại (với cùng ID) trong khoảng thời gian đó, nó **claim lại đúng partition cũ** → không rebalance.
 
-```
-KHÔNG dùng static membership:
-   C1 restart → LeaveGroup → rebalance ngay → C1, C2, C3 đều dừng
-   (dead time ~30s mỗi lần deploy)
-
-DÙNG static membership (group.instance.id = "pod-1"):
-   C1 (pod-1) restart → không gửi LeaveGroup, chỉ mất heartbeat
-   Kafka giữ assignment cho pod-1 trong session.timeout.ms (vd 5 phút)
-   C1 (pod-1) up lại → claim lại P0,P1 → KHÔNG REBALANCE
-   (dead time = 0 nếu restart xong < session.timeout.ms)
+```d2 title="Static membership khi rolling restart"
+direction: right
+dynamic: "Không static membership" {
+  restart: C1 restart
+  leave: LeaveGroup
+  rebalance: "Rebalance ngay\nCả group dừng, ví dụ ~30s"
+  restart -> leave -> rebalance
+}
+static: "group.instance.id = pod-1" {
+  restart: "C1 restart\nKhông gửi LeaveGroup, mất heartbeat"
+  retain: "Kafka giữ assignment\nTrong session.timeout.ms — ví dụ 5 phút"
+  resume: "C1 trở lại kịp timeout\nNhận lại P0,P1 — không rebalance"
+  restart -> retain -> resume
+}
 ```
 
 ### Cấu hình
@@ -302,31 +369,49 @@ Eager protocol "thu hồi tất cả rồi chia lại" — dừng toàn bộ. Co
 
 ### So sánh eager vs cooperative
 
-```
-Tình huống: C3 mới join group (C1 đang giữ P0,P1; C2 đang giữ P2,P3)
+```d2 title="Eager và cooperative khi C3 join"
+direction: right
+before: "C3 mới join\nC1 giữ P0,P1; C2 giữ P2,P3"
+stop: "Eager — revoke toàn bộ" {
+  c1: C1 revoke P0,P1
+  c2: C2 revoke P2,P3
+  c3: C3 chưa có partition
+}
+wait: "STOP toàn group\nVí dụ dead time ~30s"
+after: "Assignment mới\nC1=[P0], C2=[P1,P2], C3=[P3]"
+before -> stop -> wait -> after
 
-EAGER (mặc định):
-   C1 revoke P0,P1  ─┐
-   C2 revoke P2,P3  ─┤ STOP toàn bộ (dead time dài)
-   C3 (chưa có gì)  ─┘
-   → chia lại từ đầu: C1=[P0], C2=[P1,P2], C3=[P3]
 
-COOPERATIVE:
-   C1 vẫn xử lý P0,P1 (không dừng!)
-   C2 vẫn xử lý P2 (không dừng!)
-   → chỉ C2 revoke P3 (partition cần chuyển)
-   → C3 nhận P3
-   → dead time chỉ cho P3, các partition khác liên tục
+coop_join: C3 mới join
+running: "Không dừng" {c1: C1 giữ P0,P1; c2: C2 giữ P2}
+move: "Chỉ P3 tạm dừng" {c2: C2 revoke P3; c3: C3 nhận P3; c2 -> c3: Di chuyển P3}
+coop_join -> running
+coop_join -> move
 ```
 
 ### Cấu hình
 
-```yaml
-spring:
-  kafka:
-    consumer:
-      properties:
-        partition.assignment.strategy: org.apache.kafka.clients.consumer.CooperativeStickyAssignor
+Với classic group protocol, cấu hình dưới đây minh họa việc thay `RangeAssignor` (eager) bằng `CooperativeStickyAssignor`. Khi nâng cấp group đang chạy, cần lộ trình rolling migration tương thích trên **tất cả** consumer; không trộn hai assignor không có phần giao nhau.
+
+```code-diff
+title: Chuyển từ eager sang cooperative assignment
+language: yaml
+view: split
+wordDiff: true
+before:
+  code: |-
+    spring:
+      kafka:
+        consumer:
+          properties:
+            partition.assignment.strategy: org.apache.kafka.clients.consumer.RangeAssignor
+after:
+  code: |-
+    spring:
+      kafka:
+        consumer:
+          properties:
+            partition.assignment.strategy: org.apache.kafka.clients.consumer.CooperativeStickyAssignor
 ```
 
 ### So sánh hiệu quả
@@ -375,12 +460,10 @@ Xem log consumer chi tiết, mỗi 5 phút thấy:
 
 Một thư viện **third-party** (liveness probe handler) gọi `KafkaConsumer.close()` mỗi 5 phút "để kiểm tra health", rồi mở lại. Mỗi lần close → gửi `LeaveGroup` → **trigger rebalance toàn group**.
 
-```
-Hành vi sai:  liveness check → close() consumer → reopen
-              → mỗi 5 phút 1 rebalance → group đứng 40s
-
-Hành vi đúng: liveness check → chỉ kiểm tra connection/heartbeat
-              → KHÔNG close consumer đang chạy
+```d2 title="Health check không nên đóng consumer đang chạy"
+direction: right
+bad: "Hành vi sai" {health: Liveness check; close: close() consumer rồi reopen; rebalance: "Ví dụ mỗi 5 phút một rebalance\nGroup dừng 40s"; health -> close -> rebalance}
+good: "Hành vi đúng" {health: Liveness check; check: Chỉ kiểm tra connection / heartbeat; keep: Không close consumer đang chạy; health -> check -> keep}
 ```
 
 ### Fix
@@ -422,21 +505,27 @@ Fix dài hạn:
 
 ### Cheat sheet
 
-```
-╔═══════════════════════════════════════════════════════════════╗
-║  Rebalance (eager) = STOP-THE-WORLD toàn group                  ║
-║  ───────────────────────────────────────────────────────────   ║
-║  Trigger: crash, leave, join, metadata change                   ║
-║  Dead time: ~10–60s mỗi lần                                     ║
-║  Storm = rebalance liên tục → group gần như không xử lý          ║
-║  ───────────────────────────────────────────────────────────   ║
-║  Giảm thiểu:                                                    ║
-║   • Static Membership     → restart không trigger rebalance    ║
-║   • Cooperative protocol  → chỉ di chuyển partition cần đổi    ║
-║   • Cân max.poll.records × proc_time < max.poll.interval.ms    ║
-║   • Alert khi rebalance/hour > ngưỡng                          ║
-╚═══════════════════════════════════════════════════════════════╝
-```
+<Callout type="info">
+
+Rebalance (eager) = STOP-THE-WORLD toàn group
+
+Trigger: crash, leave, join, metadata change
+
+Dead time: ~10–60s mỗi lần
+
+Storm = rebalance liên tục → group gần như không xử lý
+
+Giảm thiểu:
+
+- Static Membership     → restart không trigger rebalance
+
+- Cooperative protocol  → chỉ di chuyển partition cần đổi
+
+- Cân max.poll.records × proc_time &lt; max.poll.interval.ms
+
+- Alert khi rebalance/hour &gt; ngưỡng
+
+</Callout>
 
 ### 3 nguyên tắc áp dụng ngay
 

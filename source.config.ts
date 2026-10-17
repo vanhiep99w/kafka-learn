@@ -1,27 +1,12 @@
 import { remarkDirectiveAdmonition } from 'fumadocs-core/mdx-plugins';
 import { defineDocs, defineConfig } from 'fumadocs-mdx/config';
 import remarkGithubAdmonitions from 'remark-github-admonitions-to-directives';
-import { visit } from 'unist-util-visit';
-
-function remarkMermaid() {
-  return (tree: import('mdast').Root) => {
-    visit(tree, 'code', (node, index, parent) => {
-      if (node.lang !== 'mermaid' || index === undefined || !parent) return;
-      (parent.children as unknown[])[index] = {
-        type: 'mdxJsxFlowElement',
-        name: 'MermaidDiagram',
-        attributes: [
-          {
-            type: 'mdxJsxAttribute',
-            name: 'chart',
-            value: node.value,
-          },
-        ],
-        children: [],
-      };
-    });
-  };
-}
+import { remarkD2 } from '@vanhiep99w/docs-kit/d2';
+import { remarkTerminalSession } from '@vanhiep99w/docs-kit/terminal-session';
+import { remarkCodeDiff } from '@vanhiep99w/docs-kit/code-diff';
+import { remarkCodeWalkthrough } from '@vanhiep99w/docs-kit/code-walkthrough';
+import { remarkProtocolExchange } from '@vanhiep99w/docs-kit/protocol-exchange';
+import { remarkSpanWaterfall } from '@vanhiep99w/docs-kit/span-waterfall';
 
 export const docs = defineDocs({
   dir: 'content/docs',
@@ -32,7 +17,19 @@ export default defineConfig({
     remarkPlugins: [
       remarkGithubAdmonitions,
       remarkDirectiveAdmonition,
-      remarkMermaid,
+      [remarkD2, {
+        sketch: false,
+        scale: 1,
+        interactive: true,
+        defaultCaption: 'Sơ đồ',
+        assetsRoot: 'content/assets/d2',
+        cacheDir: '.next/cache/docs-kit/d2',
+      }],
+      remarkTerminalSession,
+      remarkCodeDiff,
+      remarkCodeWalkthrough,
+      remarkProtocolExchange,
+      remarkSpanWaterfall,
     ],
   },
 });

@@ -23,20 +23,18 @@ description: "Cách Kafka Producer hoạt động: batching, linger.ms, buffer m
 - Gửi vào **partition** nào (qua key hoặc custom partitioner)
 - **Độ đảm bảo** (acks setting)
 
-```
-Your Application
-      │
-      ▼
-┌─────────────────────────────────────────────┐
-│              Kafka Producer                 │
-│  ┌──────────┐  ┌───────────┐  ┌──────────┐  │
-│  │Serialize │→ │  Partition│→ │  Buffer  │  │
-│  │ Key+Val  │  │  Selector │  │  (Batch) │  │
-│  └──────────┘  └───────────┘  └──────────┘  │
-└─────────────────────────────────────────────┘
-      │
-      ▼ network
-Kafka Broker (Leader Partition)
+```d2 title="Pipeline của Kafka producer"
+direction: right
+app: Your Application
+producer: Kafka Producer {
+  ser: Serialize key + value
+  partition: Partition selector
+  buffer: Buffer — batch
+  ser -> partition -> buffer
+}
+broker: Kafka Broker — Leader partition
+app -> producer.ser
+producer.buffer -> broker: Network
 ``` 
 
 ---
@@ -45,22 +43,34 @@ Kafka Broker (Leader Partition)
 
 Từ lúc gọi `send()` đến khi message đến Broker, message đi qua pipeline:
 
-```mermaid
-flowchart LR
-    A["Application\ncall send()"] --> B["Serializer\nKey+Value → bytes"]
-    B --> C["Partitioner\nchọn partition"]
-    C --> D["RecordAccumulator\nBuffer — gom batch"]
-    D --> E{Batch đủ lớn\nhoặc linger.ms hết?}
-    E -->|Yes| F["Sender Thread\ngửi qua network"]
-    E -->|No| D
-    F --> G["Kafka Broker\n(Leader Partition)"]
-    G --> H{acks config?}
-    H -->|acks=0| I["✅ Return ngay\nkhông chờ"]
-    H -->|acks=1| J["Chờ Leader ack"]
-    H -->|acks=all| K["Chờ ISR ack"]
-    J --> L["CompletableFuture\nresolved"]
-    K --> L
-    I --> L
+```d2 title="Producer Pipeline"
+direction: right
+A: "Application\ncall send()"
+B: "Serializer\nKey+Value → bytes"
+C: "Partitioner\nchọn partition"
+D: "RecordAccumulator\nBuffer — gom batch"
+E: "Batch đủ lớn\nhoặc linger.ms hết?" { shape: diamond }
+F: "Sender Thread\ngửi qua network"
+G: "Kafka Broker\n(Leader Partition)"
+H: "acks config?" { shape: diamond }
+I: "✅ Return ngay\nkhông chờ"
+J: "Chờ Leader ack"
+K: "Chờ ISR ack"
+L: "CompletableFuture\nresolved"
+A -> B
+B -> C
+C -> D
+D -> E
+E -> F: "Yes"
+E -> D: "No"
+F -> G
+G -> H
+H -> I: "acks=0"
+H -> J: "acks=1"
+H -> K: "acks=all"
+J -> L
+K -> L
+I -> L
 ```
 
 ---
@@ -71,30 +81,27 @@ Producer **gom nhiều messages vào một batch** trước khi gửi — tăng 
 
 ### Hai cơ chế trigger gửi batch
 
-```
-┌──────────────────────────────────────────────────────────────────┐
-│                    RecordAccumulator Buffer                      │
-│                                                                  │
-│  Partition 0 Batch: [msg1][msg2][msg3]...          16KB max      │
-│  Partition 1 Batch: [msg1]                                       │
-│  Partition 2 Batch: [msg1][msg2]                                 │
-│                                                                  │
-│  Trigger gửi khi:                                                │
-│  1. Batch size >= batch.size (mặc định 16KB)  → Flush ngay       │
-│  2. linger.ms hết hạn (mặc định 0ms)          → Flush dù chưa    │
-│                                                full              │
-└──────────────────────────────────────────────────────────────────┘
+```d2 title="RecordAccumulator gom batch theo partition"
+direction: right
+buffer: RecordAccumulator {
+  p0: "Partition 0 batch\nmsg1, msg2, msg3…"
+  p1: "Partition 1 batch\nmsg1"
+  p2: "Partition 2 batch\nmsg1, msg2"
+}
+trigger: "Batch đầy hoặc linger.ms hết?" {shape: diamond}
+send: Sender thread gửi batch
+buffer -> trigger
+trigger -> send: Có
+trigger -> buffer: Chưa
+note: "Ví dụ cấu hình trong bài:\nbatch.size = 16KB, linger.ms = 0ms\nKiểm tra default theo version Kafka client"
 ```
 
 ### Tác dụng của linger.ms
 
-```
-linger.ms = 0 (mặc định):
-  msg1 gửi ngay → 1 request/message → latency thấp, throughput thấp
-
-linger.ms = 10:
-  msg1, msg2, msg3 trong 10ms → 1 request/nhiều messages → throughput cao
-  Trade-off: thêm 0-10ms latency
+```d2 title="linger.ms đổi latency lấy batching"
+direction: right
+zero: "linger.ms = 0" {input: msg1; request: 1 request / message; input -> request: Gửi ngay; note: Latency thấp — throughput thấp}
+ten: "linger.ms = 10" {input: "msg1, msg2, msg3 trong 10ms"; request: 1 request / nhiều messages; input -> request: Gom batch; note: "Thêm 0–10ms latency\nThroughput cao hơn"}
 ```
 
 ### Cấu hình production-ready
@@ -125,25 +132,11 @@ spring:
 
 `acks` quyết định **khi nào Producer coi message là "đã gửi thành công"**:
 
-```
-acks=0 (Fire and Forget):
-  Producer → Broker  (không chờ gì cả)
-  ✅ Throughput tối đa
-  ❌ Có thể mất data nếu broker down
-
-acks=1 (Leader Ack):
-  Producer → Leader → ✅ ACK về Producer
-              │
-              └──→ Follower (async, sau khi đã ACK)
-  ⚠️ Trade-off: Nếu Leader crash trước khi replicate → mất data
-  ✅ Good balance cho non-critical data
-
-acks=all/-1 (Full ISR Ack):
-  Producer → Leader → Follower1 → ✅
-                    → Follower2 → ✅
-                    → ACK về Producer (chỉ sau khi TẤT CẢ ISR ack)
-  ✅ Không mất data (nếu ISR size >= 2)
-  ⚠️ Latency cao hơn một chút
+```d2 title="Ba mức acks"
+direction: right
+none: "acks=0 — fire and forget" {p: Producer; b: Broker; p -> b: Không chờ ACK; risk: Có thể mất data khi broker down}
+one: "acks=1 — leader ACK" {p: Producer; l: Leader; f: Follower; p -> l: Send; l -> p: ACK; l -> f: Replicate async; risk: Leader crash trước replication có thể mất data}
+all: "acks=all / -1" {p: Producer; l: Leader; f1: ISR follower 1; f2: ISR follower 2; p -> l: Send; l -> f1: Replicate; l -> f2: Replicate; l -> p: ACK sau khi ISR xác nhận; note: "Độ bền còn phụ thuộc ISR / min.insync.replicas\nLatency cao hơn"}
 ```
 
 > [!TIP]
@@ -155,29 +148,30 @@ acks=all/-1 (Full ISR Ack):
 
 ### Vấn đề với Retry đơn giản
 
-```
-Scenario: Producer gửi message, timeout → retry
-
-Producer ──send msg A──▶ Broker  (broker nhận được, đang process)
-         ←─ TIMEOUT ──── (network issue)
-Producer ──retry msg A──▶ Broker  (broker nhận lần 2!)
-
-Kết quả: msg A bị ghi 2 lần → DUPLICATE!
+```d2 title="Retry sau timeout có thể tạo duplicate"
+shape: sequence_diagram
+p: Producer
+b: Broker
+p -> b: Send msg A — broker nhận được
+b -> p: Timeout / mất response {style.stroke-dash: 4; target-arrowhead.shape: cross}
+p -> b: Retry msg A
+b.note: "Không dedup → msg A có thể ghi hai lần"
 ```
 
 ### Idempotent Producer — Giải pháp
 
 Kích hoạt `enable.idempotence=true` → Kafka tự dedup:
 
-```
-Producer gán mỗi message một ID duy nhất:
-  (ProducerID, PartitionID, SequenceNumber)
-
-Broker nhớ sequence number đã nhận:
-  - Message mới: write vào log ✅
-  - Message duplicate (same seq): bỏ qua ✅ (không ghi lại)
-
-→ Exactly-once delivery trong phạm vi một partition, một session
+```d2 title="Idempotent producer deduplicate retry"
+direction: right
+p: "Producer\nProducerID + PartitionID + SequenceNumber"
+b: "Broker kiểm tra sequence" {shape: diamond}
+new: "Message mới\nWrite vào log"
+dup: "Cùng sequence đã nhận\nKhông ghi lại"
+p -> b
+b -> new: Mới
+b -> dup: Duplicate
+scope: "Chống duplicate do retry\nPhạm vi producer session và partition"
 ```
 
 ```yaml

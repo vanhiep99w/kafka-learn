@@ -25,17 +25,13 @@ description: "Message keys, partition assignment, hot partitions và các giải
 
 Mỗi message Kafka có thể có một **key** tùy chọn. Key quyết định message sẽ đến **partition nào**.
 
-```
-┌──────────────────────────────────────┐
-│           Kafka Message              │
-├──────────────┬───────────────────────┤
-│ Key          │ "order-123"           │
-│ Value        │ { orderId: 123, ... } │
-│ Headers      │ { trace-id: "abc" }   │
-│ Timestamp    │ 1704067200000         │
-│ Partition    │ Tính từ hash(key)     │
-└──────────────┴───────────────────────┘
-```
+| Trường | Giá trị ví dụ |
+| --- | --- |
+| Key | `"order-123"` |
+| Value | `{ orderId: 123, ... }` |
+| Headers | `{ trace-id: "abc" }` |
+| Timestamp | `1704067200000` |
+| Partition | Tính từ hash(key) |
 
 **Công thức phân partition:**
 
@@ -49,20 +45,31 @@ Nếu key là `null` → Kafka dùng **Sticky Partitioning** (gom vào một par
 
 ## Decision: Có nên dùng Key không?
 
-```mermaid
-flowchart TD
-    A["📤 Gửi Message"] --> B{"Các events liên quan\ncó cần được ordering không?"}
-    B -->|"❌ Không"| C["Dùng null key\n(Round-robin)"]
-    B -->|"✅ Có"| D{"Key có phân phối\nđều không?"}
-    D -->|"✅ Đều"| E["Dùng entity ID làm key\n(orderId, userId)"]
-    D -->|"⚠️ Không đều — Hot keys"| F{"Ordering nghiêm ngặt\ncó bắt buộc không?"}
-    F -->|"❌ Không"| G["Dùng key salting\n(userId-1, userId-2...)"]
-    F -->|"✅ Có"| H["Chấp nhận hot partition\n+ scale partition count"]
-
-    C --> I["✅ Load balance tốt nhất\n❌ Không đảm bảo ordering"]
-    E --> J["✅ Ordering per-entity\n⚠️ Nguy cơ data skew"]
-    G --> K["✅ Phân phối tốt hơn\n⚠️ Mất partial ordering"]
-    H --> L["✅ Ordering nghiêm ngặt\n❌ Performance risk"]
+```d2 title="Decision: Có nên dùng Key không?"
+direction: down
+A: "📤 Gửi Message"
+B: "Các events liên quan\ncó cần được ordering không?" { shape: diamond }
+C: "Dùng null key\n(Round-robin)"
+D: "Key có phân phối\nđều không?" { shape: diamond }
+E: "Dùng entity ID làm key\n(orderId, userId)"
+F: "Ordering nghiêm ngặt\ncó bắt buộc không?" { shape: diamond }
+G: "Dùng key salting\n(userId-1, userId-2...)"
+H: "Chấp nhận hot partition\n+ scale partition count"
+I: "✅ Load balance tốt nhất\n❌ Không đảm bảo ordering"
+J: "✅ Ordering per-entity\n⚠️ Nguy cơ data skew"
+K: "✅ Phân phối tốt hơn\n⚠️ Mất partial ordering"
+L: "✅ Ordering nghiêm ngặt\n❌ Performance risk"
+A -> B
+B -> C: "❌ Không"
+B -> D: "✅ Có"
+D -> E: "✅ Đều"
+D -> F: "⚠️ Không đều — Hot keys"
+F -> G: "❌ Không"
+F -> H: "✅ Có"
+C -> I
+E -> J
+G -> K
+H -> L
 ```
 
 ---
@@ -164,47 +171,46 @@ P3: ████░░░░░░░░░░░░░░░░░░  Các ord
 
 ### Minh họa Hot Partition
 
-```
-┌─────────────────────────────────────────────────────────────────────────────────┐
-│                         HOT PARTITION VISUALIZED                                │
-├─────────────────────────────────────────────────────────────────────────────────┤
-│                                                                                 │
-│   Topic: user-events (6 Partitions)                                             │
-│                                                                                 │
-│   Messages/sec per partition:                                                   │
-│                                                                                 │
-│   P0: ████░░░░░░░░░░░░░░░░░░░░░░░░░░  500 msg/s   ✅ Bình thường                │
-│   P1: ███░░░░░░░░░░░░░░░░░░░░░░░░░░░  400 msg/s   ✅ Bình thường                │
-│   P2: █████████████████████████████░  50,000 msg/s 🔥 HOT!                      │
-│   P3: ████░░░░░░░░░░░░░░░░░░░░░░░░░░  450 msg/s   ✅ Bình thường                │
-│   P4: ███░░░░░░░░░░░░░░░░░░░░░░░░░░░  380 msg/s   ✅ Bình thường                │
-│   P5: ████░░░░░░░░░░░░░░░░░░░░░░░░░░  420 msg/s   ✅ Bình thường                │
-│                                                                                 │
-│   Consumer Lag:                                                                 │
-│   P0: 0    P1: 0    P2: 2,500,000 🚨    P3: 0    P4: 0    P5: 0                 │
-│                                                                                 │
-│   P2 nhận 100x nhiều hơn → Consumer không thể bắt kịp!                          │
-└─────────────────────────────────────────────────────────────────────────────────┘
-```
+Topic `user-events` có 6 partition:
+
+| Partition | Messages/s | Consumer lag | Trạng thái |
+| --- | ---: | ---: | --- |
+| P0 | 500 | 0 | Bình thường |
+| P1 | 400 | 0 | Bình thường |
+| P2 | 50.000 | 2.500.000 | **HOT — consumer không bắt kịp** |
+| P3 | 450 | 0 | Bình thường |
+| P4 | 380 | 0 | Bình thường |
+| P5 | 420 | 0 | Bình thường |
+
+P2 nhận traffic khoảng 100 lần partition bình thường. Lag chỉ tập trung ở P2.
 
 ### Nguyên nhân Hot Partition
 
-```mermaid
-flowchart TD
-    A[Nguyên nhân Hot Partition] --> B[Key Distribution Issues]
-    A --> C[Business Logic Patterns]
-    A --> D[Time-based Patterns]
-
-    B --> B1["Popular entities\n(celebrity users, viral products)"]
-    B --> B2["Low cardinality keys\n(region: chỉ 3 giá trị)"]
-    B --> B3["Poor key design"]
-
-    C --> C1["Flash sales\n(1 product nhận toàn bộ traffic)"]
-    C --> C2["Breaking news\n(1 topic trending)"]
-    C --> C3["Bot attacks\n(1 IP/user flood)"]
-
-    D --> D1["Time-based keys\n(tất cả events cùng giờ)"]
-    D --> D2["Batch jobs\n(bulk inserts cùng key)"]
+```d2 title="Nguyên nhân Hot Partition"
+direction: down
+A: "Nguyên nhân Hot Partition"
+B: "Key Distribution Issues"
+C: "Business Logic Patterns"
+D: "Time-based Patterns"
+B1: "Popular entities\n(celebrity users, viral products)"
+B2: "Low cardinality keys\n(region: chỉ 3 giá trị)"
+B3: "Poor key design"
+C1: "Flash sales\n(1 product nhận toàn bộ traffic)"
+C2: "Breaking news\n(1 topic trending)"
+C3: "Bot attacks\n(1 IP/user flood)"
+D1: "Time-based keys\n(tất cả events cùng giờ)"
+D2: "Batch jobs\n(bulk inserts cùng key)"
+A -> B
+A -> C
+A -> D
+B -> B1
+B -> B2
+B -> B3
+C -> C1
+C -> C2
+C -> C3
+D -> D1
+D -> D2
 ```
 
 ---
@@ -213,57 +219,44 @@ flowchart TD
 
 #### Ví dụ 1: E-Commerce Flash Sale
 
-```
-┌─────────────────────────────────────────────────────────────────────────────────┐
-│                    KỊCH BẢN: Black Friday Flash Sale                            │
-├─────────────────────────────────────────────────────────────────────────────────┤
-│                                                                                 │
-│   Topic: order-events, Key: productId                                           │
-│                                                                                 │
-│   Ngày bình thường:                                                             │
-│   Product A (100/sec) → [P0]  ✅                                                │
-│   Product B (120/sec) → [P1]  ✅                                                │
-│   Product C ( 80/sec) → [P2]  ✅                                                │
-│   Product D (110/sec) → [P3]  ✅  → Balanced                                    │
-│                                                                                 │
-│   Flash Sale (iPhone giảm 50%):                                                 │
-│   Product A ( 100/sec) → [P0]  ✅                                               │
-│   iPhone   (50,000/sec) → [P1]  🔥 ĐANG SỤP!                                    │
-│   Product C (  80/sec) → [P2]  ✅                                               │
-│   Product D ( 110/sec) → [P3]  ✅                                               │
-│                                                                                 │
-│   Hậu quả:                                                                      │
-│   - Consumer P1 lag 5 tiếng                                                     │
-│   - Đơn hàng bị queue hàng giờ                                                  │
-│   - Khách hàng thấy "đang xử lý..." mãi                                         │
-│   - Thiệt hại doanh thu!                                                        │
-└─────────────────────────────────────────────────────────────────────────────────┘
+```d2 title="Flash sale tạo hot key productId"
+direction: right
+normal: "Ngày bình thường" {
+  a: "Product A — 100/s"; b: "Product B — 120/s"; c: "Product C — 80/s"; d: "Product D — 110/s"
+  p0: P0; p1: P1; p2: P2; p3: P3
+  a -> p0; b -> p1; c -> p2; d -> p3
+}
+sale: "Flash sale — iPhone giảm 50%" {
+  a: "Product A — 100/s"; b: "iPhone — 50,000/s"; c: "Product C — 80/s"; d: "Product D — 110/s"
+  p0: P0; p1: "P1 — HOT"; p2: P2; p3: P3
+  a -> p0; b -> p1; c -> p2; d -> p3
+  impact: "Consumer P1 lag 5 giờ\nĐơn hàng chờ hàng giờ\nKhách thấy đang xử lý → thiệt hại doanh thu"
+  p1 -> impact
+}
 ```
 
 #### Ví dụ 2: Social Media Viral (Twitter/X Effect)
 
-```
-Kịch bản: Notification service, Key = targetUserId
-
-Khi @elonmusk tweet → 150 triệu followers nhận notification
-  → Key = userId của từng follower → PHÂN PHỐI ĐỀU ✅ Không hot partition
-
-Khi 10,000 người @mention @elonmusk →
-  → Key = "elonmusk" (người nhận notification)
-  → Tất cả 10,000 notifications → CÙNG PARTITION 🔥 HOT!
+```d2 title="Notification key quyết định phân phối"
+direction: right
+fanout: "@elonmusk tweet\n150 triệu followers" {keys: Key = userId từng follower; result: Phân phối đều; keys -> result}
+mention: "10,000 người mention @elonmusk" {key: Key = elonmusk; result: Cùng một partition — HOT; key -> result}
 ```
 
 #### Ví dụ 3: IoT Sensor Data
 
-```
-Topic: sensor-readings, Key: regionId
-
-NYC:   50,000 sensors → 500K msg/sec → [P0] 🔥
-Rural:    500 sensors →   5K msg/sec → [P1] ✅
-Tokyo: 80,000 sensors → 800K msg/sec → [P2] 🔥🔥
-
-Giải pháp: Đổi key từ regionId → sensorId
-→ 130,500 unique keys → phân phối đều
+```d2 title="Low-cardinality key gây skew"
+direction: right
+nyc: "NYC — 50,000 sensors\n500K msg/s"
+rural: "Rural — 500 sensors\n5K msg/s"
+tokyo: "Tokyo — 80,000 sensors\n800K msg/s"
+p0: P0 — HOT
+p1: P1 — bình thường
+p2: P2 — HOT
+nyc -> p0: regionId
+rural -> p1: regionId
+tokyo -> p2: regionId
+fix: "Đổi key sang sensorId\n130,500 unique keys → phân phối đều hơn"
 ```
 
 ---
@@ -290,20 +283,29 @@ kafka-log-dirs.sh --bootstrap-server localhost:9092 \
 
 ### JMX Metrics để monitor
 
-```mermaid
-flowchart LR
-    subgraph "Detection Methods"
-        A[Monitoring] --> A1["Consumer Lag\nper partition"]
-        A --> A2["Bytes In/Out\nper partition"]
-        A --> A3["Message rate\nper partition"]
-
-        B[CLI Tools] --> B1["kafka-consumer-groups.sh\n--describe"]
-        B --> B2["kafka-log-dirs.sh"]
-
-        C[Metrics] --> C1["JMX: MessagesInPerSec"]
-        C --> C2["JMX: BytesInPerSec"]
-        C --> C3["Prometheus/Grafana"]
-    end
+```d2 title="JMX Metrics để monitor"
+direction: right
+g1: "Detection Methods" {
+  A: "Monitoring"
+  A1: "Consumer Lag\nper partition"
+  A2: "Bytes In/Out\nper partition"
+  A3: "Message rate\nper partition"
+  B: "CLI Tools"
+  B1: "kafka-consumer-groups.sh\n--describe"
+  B2: "kafka-log-dirs.sh"
+  C: "Metrics"
+  C1: "JMX: MessagesInPerSec"
+  C2: "JMX: BytesInPerSec"
+  C3: "Prometheus/Grafana"
+}
+g1.A -> g1.A1
+g1.A -> g1.A2
+g1.A -> g1.A3
+g1.B -> g1.B1
+g1.B -> g1.B2
+g1.C -> g1.C1
+g1.C -> g1.C2
+g1.C -> g1.C3
 ```
 
 ---
@@ -314,18 +316,15 @@ flowchart LR
 
 Thêm suffix ngẫu nhiên vào hot key để phân tán messages:
 
-```
-Trước salting: key = "celebrity-user-123" → hash() % 6 = Partition 2 🔥
-
-Salted keys:
-"celebrity-user-123-0" → hash() % 6 = P0
-"celebrity-user-123-1" → hash() % 6 = P3
-"celebrity-user-123-2" → hash() % 6 = P1
-"celebrity-user-123-3" → hash() % 6 = P5
-...
-
-Kết quả: 50,000 msg/sec chia đều ~10 partitions = 5,000/partition ✅
-Trade-off: Mất strict ordering cho hot key (chấp nhận được trong hầu hết cases)
+```d2 title="Key salting phân tán hot key"
+direction: right
+before: "Trước salting" {key: celebrity-user-123; p: "P2 — HOT"; key -> p: hash mod 6}
+after: "Sau salting — ví dụ 6 partition" {
+  k0: celebrity-user-123-0; k1: celebrity-user-123-1; k2: celebrity-user-123-2; k3: celebrity-user-123-3
+  p0: P0; p3: P3; p1: P1; p5: P5
+  k0 -> p0; k1 -> p3; k2 -> p1; k3 -> p5
+}
+tradeoff: "Phân phối sang nhiều partition\nĐổi lại mất strict ordering của hot key"
 ```
 
 **Java Implementation:**
@@ -444,21 +443,28 @@ spring:
 
 Tách hot keys ra topic riêng với nhiều partitions hơn:
 
-```mermaid
-graph TB
-    subgraph "Trước: Single Topic"
-        P1[Producer] --> T1[orders topic]
-        T1 --> C1[Consumer Group]
-    end
-
-    subgraph "Sau: Split by Traffic Pattern"
-        P2[Producer] --> R{Router}
-        R -->|"Normal keys"| T2["orders-normal\n6 partitions"]
-        R -->|"Hot keys"| T3["orders-high-volume\n24 partitions"]
-
-        T2 --> C2["Consumer Group A\n6 instances"]
-        T3 --> C3["Consumer Group B\n24 instances"]
-    end
+```d2 title="Solution 3: Separate Topics"
+direction: down
+g1: "Trước: Single Topic" {
+  P1: "Producer"
+  T1: "orders topic"
+  C1: "Consumer Group"
+}
+g2: "Sau: Split by Traffic Pattern" {
+  P2: "Producer"
+  R: "Router" { shape: diamond }
+  T2: "orders-normal\n6 partitions"
+  T3: "orders-high-volume\n24 partitions"
+  C2: "Consumer Group A\n6 instances"
+  C3: "Consumer Group B\n24 instances"
+}
+g1.P1 -> g1.T1
+g1.T1 -> g1.C1
+g2.P2 -> g2.R
+g2.R -> g2.T2: "Normal keys"
+g2.R -> g2.T3: "Hot keys"
+g2.T2 -> g2.C2
+g2.T3 -> g2.C3
 ```
 
 ```java
@@ -485,15 +491,12 @@ public class TopicRoutingProducer {
 > [!WARNING]
 > **Hiểu đúng**: Tăng partitions **KHÔNG fix** single hot key problem!
 
-```
-Trước: 6 partitions
-hash("hot-key") % 6 = Partition 2 🔥
-
-Sau: 24 partitions
-hash("hot-key") % 24 = Partition 14 🔥
-
-→ Hot key vẫn CHỈ đến 1 partition (nay là P14 thay vì P2)
-→ Vẫn hot partition!
+```d2 title="Tăng partition không chia nhỏ một hot key"
+direction: right
+before: "6 partitions" {k: hot-key; p: P2 — HOT; k -> p: hash mod 6}
+after: "24 partitions" {k: hot-key; p: P14 — HOT; k -> p: hash mod 24}
+before -> after: Tăng partition count
+note: "Một key vẫn chỉ tới một partition\nKhông giải quyết single hot key"
 ```
 
 **Khi nào tăng partition THỰC SỰ giúp ích:**
@@ -515,21 +518,27 @@ hash("hot-key") % 24 = Partition 14 🔥
 
 ### Decision Flowchart
 
-```mermaid
-flowchart TD
-    A[Phát hiện Hot Partition] --> B{Single hot key\nhay nhiều keys colliding?}
-
-    B -->|Single Hot Key| C{Cần strict ordering\ncho key này không?}
-    B -->|Nhiều Keys Colliding| D[Tăng Partition Count]
-
-    C -->|Có, ordering critical| E{Có thể scale\nconsumer processing không?}
-    C -->|Không, không cần ordering| F[Dùng Key Salting]
-
-    E -->|Có| G["Chấp nhận hot partition\n+ Faster consumer\n+ Dedicated consumer cho hot partition"]
-    E -->|Không| H{Partial ordering\nchấp nhận được không?}
-
-    H -->|Có| I["Consistent Salting\n(salt by sub-key)"]
-    H -->|Không| J["Separate Topic\ncho hot key"]
+```d2 title="Decision Flowchart"
+direction: down
+A: "Phát hiện Hot Partition"
+B: "Single hot key\nhay nhiều keys colliding?" { shape: diamond }
+C: "Cần strict ordering\ncho key này không?" { shape: diamond }
+D: "Tăng Partition Count"
+E: "Có thể scale\nconsumer processing không?" { shape: diamond }
+F: "Dùng Key Salting"
+G: "Chấp nhận hot partition\n+ Faster consumer\n+ Dedicated consumer cho hot partition"
+H: "Partial ordering\nchấp nhận được không?" { shape: diamond }
+I: "Consistent Salting\n(salt by sub-key)"
+J: "Separate Topic\ncho hot key"
+A -> B
+B -> C: "Single Hot Key"
+B -> D: "Nhiều Keys Colliding"
+C -> E: "Có, ordering critical"
+C -> F: "Không, không cần ordering"
+E -> G: "Có"
+E -> H: "Không"
+H -> I: "Có"
+H -> J: "Không"
 ```
 
 ---
@@ -584,16 +593,21 @@ groups:
 
 ### Quick Reference — Công thức chọn Key
 
-```
-Cần ordering per entity?
-  → Có: Dùng entity ID (orderId, userId)
-      → Có nguy cơ hot key? Dùng Salting
-  → Không: Dùng null key (max throughput)
-
-Key đã chọn gây hot partition?
-  → Ordering critical: Consistent Salting hoặc Separate Topic
-  → Ordering không quan trọng: Random Salting
-  → Nhiều keys collision: Tăng Partitions
+```d2 title="Chọn key và xử lý hot partition"
+direction: right
+order: "Cần ordering per entity?" {shape: diamond}
+entity: Entity ID — orderId / userId
+none: Null key — ưu tiên throughput
+hot: "Key gây hot partition?" {shape: diamond}
+critical: "Ordering critical\nKhông salt ngẫu nhiên; xem đúng scope ordering"
+salt: "Ordering không quan trọng\nRandom salting"
+collision: "Nhiều keys collision\nTăng partitions"
+order -> entity: Có
+order -> none: Không
+entity -> hot
+hot -> critical: Strict ordering
+hot -> salt: Không cần ordering
+hot -> collision: Collision
 ```
 
 <Cards>

@@ -21,23 +21,11 @@ description: "So sánh Apache Kafka với RabbitMQ, AWS SQS/SNS, Redis Pub/Sub v
 
 Kafka **không chỉ là message queue**. Nó là **distributed commit log** — một stream platform:
 
-```
-┌─────────────────────────────────────────────────────────────────────┐
-│              Kafka Là Gì? (3 Khả Năng Trong 1)                      │
-├─────────────────────────────────────────────────────────────────────┤
-│                                                                     │
-│  1. Message Queue / Event Bus                                       │
-│     Producer → Kafka → Consumer (nhiều consumers độc lập)           │
-│                                                                     │
-│  2. Stream Processing Platform                                      │
-│     Real-time data transformation (Kafka Streams, ksqlDB)           │
-│                                                                     │
-│  3. Storage / Event Log                                             │
-│     Lưu trữ events lâu dài (retention: days/weeks/forever)          │
-│     Replay lại history bất kỳ lúc nào                               │
-│                                                                     │
-│  ⚡ RabbitMQ, SQS chỉ làm được điểm 1                                │
-└─────────────────────────────────────────────────────────────────────┘
+```d2 title="Ba vai trò của Kafka"
+grid-columns: 3
+bus: "Message queue / Event bus\nProducer → Kafka → consumer\nNhiều consumer group độc lập"
+processing: "Stream processing\nReal-time transformation\nKafka Streams / ksqlDB"
+log: "Storage / Event log\nRetention: ngày, tuần hoặc lâu hơn\nReplay lịch sử còn được giữ"
 ```
 
 ---
@@ -106,29 +94,26 @@ Nếu đang dùng AWS, SQS/SNS thường là lựa chọn mặc định. Khi nà
 
 ### SQS+SNS Fan-out vs Kafka
 
-```
-AWS Pattern (SQS+SNS Fan-out):
-                   SNS Topic
-                      │
-        ┌─────────────┼─────────────┐
-        ▼             ▼             ▼
-   SQS Queue A   SQS Queue B   SQS Queue C
-        │             │             │
-  Service A      Service B      Service C
-
-Vấn đề: Mỗi service cần 1 SQS queue riêng
-        Thêm service → thêm queue → thêm config
-        Không replay được
-
-Kafka Pattern:
-                  Kafka Topic
-                      │
-        Consumer Group A → Service A
-        Consumer Group B → Service B
-        Consumer Group C → Service C
-
-Thêm service → chỉ cần tạo consumer group mới
-Replay? Reset offset của group đó
+```d2 title="SNS + SQS fan-out và Kafka consumer groups"
+direction: down
+aws: "SNS + SQS fan-out" {
+  sns: SNS Topic
+  qa: SQS Queue A; qb: SQS Queue B; qc: SQS Queue C
+  a: Service A; b: Service B; c: Service C
+  sns -> qa -> a
+  sns -> qb -> b
+  sns -> qc -> c
+  note: "Thêm service → thêm queue + config\nKhông replay như commit log"
+}
+kafka: "Kafka pattern" {
+  topic: Kafka Topic
+  a: Consumer Group A; b: Consumer Group B; c: Consumer Group C
+  sa: Service A; sb: Service B; sc: Service C
+  topic -> a -> sa
+  topic -> b -> sb
+  topic -> c -> sc
+  note: "Thêm group khi thêm service\nReplay bằng reset offset trong retention"
+}
 ```
 
 ---
@@ -157,21 +142,28 @@ Redis Pub/Sub thường được dùng cho realtime UI (WebSocket, notifications
 
 **Change Data Capture (CDC)** là pattern dùng Kafka để stream database changes:
 
-```mermaid
-graph LR
-    subgraph "Truyền thống — Polling"
-        App1["Service A"] -->|"INSERT order"| DB1[(Database)]
-        Service2["Service B"] -->|"SELECT * WHERE updated > last_check"| DB1
-        Note1["⚠️ Polling overhead\n⚠️ Near-realtime, không realtime\n⚠️ Miss changes nếu poll quá chậm"]
-    end
-
-    subgraph "CDC với Kafka"
-        App2["Service A"] -->|"INSERT order"| DB2[(Database)]
-        DB2 -->|"Debezium reads\nbinlog/WAL"| K["Kafka Topic\n(db.orders.changes)"]
-        K --> SB["Service B"]
-        K --> SC["Service C"]
-        Note2["✅ Realtime\n✅ Không miss changes\n✅ Zero load trên DB"]
-    end
+```d2 title="Kafka vs Database (CDC)"
+direction: right
+g1: "Truyền thống — Polling" {
+  App1: "Service A"
+  DB1: "Database" { shape: cylinder }
+  Service2: "Service B"
+  Note1: "⚠️ Polling overhead\n⚠️ Near-realtime, không realtime\n⚠️ Miss changes nếu poll quá chậm"
+}
+g2: "CDC với Kafka" {
+  App2: "Service A"
+  DB2: "Database" { shape: cylinder }
+  K: "Kafka Topic\n(db.orders.changes)"
+  SB: "Service B"
+  SC: "Service C"
+  Note2: "✅ Realtime\n✅ Không miss changes\n✅ Zero load trên DB"
+}
+g1.App1 -> g1.DB1: "INSERT order"
+g1.Service2 -> g1.DB1: "SELECT * WHERE updated > last_check"
+g2.App2 -> g2.DB2: "INSERT order"
+g2.DB2 -> g2.K: "Debezium reads\nbinlog/WAL"
+g2.K -> g2.SB
+g2.K -> g2.SC
 ```
 
 **Ưu điểm CDC qua Kafka:**
@@ -184,27 +176,35 @@ graph LR
 
 ## Decision Matrix
 
-```mermaid
-flowchart TD
-    A[Chọn Messaging System] --> B{Cần giữ lại\nmessage sau khi consume?}
-
-    B -->|Không| C{Cần routing\nphức tạp?}
-    B -->|Có| D{Scale lớn?\n> 100K msg/s}
-
-    C -->|Có| E["RabbitMQ\n(flexible routing)"]
-    C -->|Không| F{AWS ecosystem?}
-
-    F -->|Có| G["SQS/SNS\n(zero-ops, cheap)"]
-    F -->|Không| H["RabbitMQ\n(simple setup)"]
-
-    D -->|Có| I["Kafka\n(distributed log)"]
-    D -->|Không| J{Nhiều services\ncùng consume?}
-
-    J -->|Có| K["Kafka\n(consumer groups)"]
-    J -->|Không| L{Cần replay\nevents?}
-
-    L -->|Có| M["Kafka\n(offset reset)"]
-    L -->|Không| N["SQS hoặc\nRabbitMQ"]
+```d2 title="Decision Matrix"
+direction: down
+A: "Chọn Messaging System"
+B: "Cần giữ lại\nmessage sau khi consume?" { shape: diamond }
+C: "Cần routing\nphức tạp?" { shape: diamond }
+D: "Scale lớn?\n> 100K msg/s" { shape: diamond }
+E: "RabbitMQ\n(flexible routing)"
+F: "AWS ecosystem?" { shape: diamond }
+G: "SQS/SNS\n(zero-ops, cheap)"
+H: "RabbitMQ\n(simple setup)"
+I: "Kafka\n(distributed log)"
+J: "Nhiều services\ncùng consume?" { shape: diamond }
+K: "Kafka\n(consumer groups)"
+L: "Cần replay\nevents?" { shape: diamond }
+M: "Kafka\n(offset reset)"
+N: "SQS hoặc\nRabbitMQ"
+A -> B
+B -> C: "Không"
+B -> D: "Có"
+C -> E: "Có"
+C -> F: "Không"
+F -> G: "Có"
+F -> H: "Không"
+D -> I: "Có"
+D -> J: "Không"
+J -> K: "Có"
+J -> L: "Không"
+L -> M: "Có"
+L -> N: "Không"
 ```
 
 ---

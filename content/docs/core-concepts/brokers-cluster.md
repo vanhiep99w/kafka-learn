@@ -26,22 +26,14 @@ description: "Kiến trúc Kafka Cluster: broker, leader/follower replication, I
 - Phục vụ messages cho Consumers
 - Replication với các brokers khác
 
-```
-┌─────────────────────────────────────────────────┐
-│                  Kafka Broker                   │
-├─────────────────────────────────────────────────┤
-│                                                 │
-│  ┌──────────────┐  ┌──────────────┐             │
-│  │  Partition 0 │  │  Partition 2 │             │
-│  │  (Leader)    │  │  (Follower)  │             │
-│  │              │  │              │             │
-│  │ Log Segment  │  │ Log Segment  │             │
-│  │ [0, 1, 2...] │  │ [0, 1, 2...] │             │
-│  └──────────────┘  └──────────────┘             │
-│                                                 │
-│  Network Layer (Producers ↔ Consumers)          │
-│  Storage Layer (Disk-based Commit Log)          │
-└─────────────────────────────────────────────────┘
+```d2 title="Các thành phần trong Kafka broker"
+direction: down
+broker: Kafka Broker {
+  p0: "Partition 0 — Leader" {log: "Log segment\n[0, 1, 2…]"}
+  p2: "Partition 2 — Follower" {log: "Log segment\n[0, 1, 2…]"}
+  network: "Network layer\nProducers ↔ Consumers"
+  storage: "Storage layer\nDisk-based commit log"
+}
 ```
 
 | Component | Mô tả | Analogy |
@@ -59,31 +51,29 @@ description: "Kiến trúc Kafka Cluster: broker, leader/follower replication, I
 
 Một Kafka cluster gồm nhiều brokers hoạt động cùng nhau:
 
-```mermaid
-graph TB
-    subgraph "Kafka Cluster (3 Brokers)"
-        B1["🖥️ Broker 1\n(broker.id=1)"]
-        B2["🖥️ Broker 2\n(broker.id=2)"]
-        B3["🖥️ Broker 3\n(broker.id=3)"]
-    end
-
-    subgraph "Topic: orders (3 Partitions, RF=3)"
-        P0["Partition 0\nLeader: B1\nFollowers: B2, B3"]
-        P1["Partition 1\nLeader: B2\nFollowers: B1, B3"]
-        P2["Partition 2\nLeader: B3\nFollowers: B1, B2"]
-    end
-
-    Producer["📤 Producer"] --> B1
-    Producer --> B2
-    Producer --> B3
-
-    B1 --> P0
-    B2 --> P1
-    B3 --> P2
-
-    Consumer["📥 Consumer"] --> B1
-    Consumer --> B2
-    Consumer --> B3
+```d2 title="Kafka Cluster Architecture"
+direction: down
+g1: "Kafka Cluster (3 Brokers)" {
+  B1: "🖥️ Broker 1\n(broker.id=1)"
+  B2: "🖥️ Broker 2\n(broker.id=2)"
+  B3: "🖥️ Broker 3\n(broker.id=3)"
+}
+g2: "Topic: orders (3 Partitions, RF=3)" {
+  P0: "Partition 0\nLeader: B1\nFollowers: B2, B3"
+  P1: "Partition 1\nLeader: B2\nFollowers: B1, B3"
+  P2: "Partition 2\nLeader: B3\nFollowers: B1, B2"
+}
+Producer: "📤 Producer"
+Consumer: "📥 Consumer"
+Producer -> g1.B1
+Producer -> g1.B2
+Producer -> g1.B3
+g1.B1 -> g2.P0
+g1.B2 -> g2.P1
+g1.B3 -> g2.P2
+Consumer -> g1.B1
+Consumer -> g1.B2
+Consumer -> g1.B3
 ```
 
 **Phân bố load tự động**: Kafka phân phối partition leaders đều giữa các brokers để cân bằng tải.
@@ -94,23 +84,18 @@ graph TB
 
 Mỗi partition có một **Leader** và nhiều **Followers** (Replicas):
 
-```
-┌──────────────────────────────────────────────────────────────────────┐
-│          Topic: orders — Partition 0 — Replication Flow              │
-├──────────────────────────────────────────────────────────────────────┤
-│                                                                      │
-│   Producer ──────────────────────────▶ Leader (Broker 1)             │
-│                               Write     │                            │
-│                              Request    │  Replicate                 │
-│                                         ├──────────────▶ Follower    │
-│                                         │              (Broker 2)    │
-│                                         │                            │
-│                                         └──────────────▶ Follower    │
-│                                                        (Broker 3)    │
-│                                                                      │
-│   Consumer ──────────────────────────▶ Leader (Broker 1)             │
-│                               Read      (ONLY Leader serves reads)   │
-└──────────────────────────────────────────────────────────────────────┘
+```d2 title="Replication của orders — partition 0"
+direction: right
+p: Producer
+c: Consumer
+l: "Broker 1\nLeader P0"
+f2: "Broker 2\nFollower P0"
+f3: "Broker 3\nFollower P0"
+p -> l: Write request
+c -> l: Read request
+l -> f2: Replicate
+l -> f3: Replicate
+note: "Luồng minh họa mặc định:\nclient đọc / ghi qua leader"
 ```
 
 **Nguyên tắc quan trọng:**
@@ -124,12 +109,15 @@ Mỗi partition có một **Leader** và nhiều **Followers** (Replicas):
 
 **ISR (In-Sync Replicas)** là tập hợp replicas đã **catch up đầy đủ** với Leader.
 
-```
-Broker 1 (Leader P0):  [msg0, msg1, msg2, msg3, msg4]  ← Latest
-Broker 2 (Follower):   [msg0, msg1, msg2, msg3, msg4]  ← In-Sync ✅
-Broker 3 (Follower):   [msg0, msg1, msg2]               ← Lagging ❌ Out of ISR
-
-ISR = {Broker1, Broker2}
+```d2 title="ISR và replica bị chậm"
+direction: down
+isr: "ISR = Broker 1, Broker 2" {
+  b1: "Broker 1 — Leader P0\nmsg 0, 1, 2, 3, 4 (latest)"
+  b2: "Broker 2 — Follower\nmsg 0, 1, 2, 3, 4 (in-sync)"
+  b1 -> b2: Replication
+}
+b3: "Broker 3 — Follower\nmsg 0, 1, 2 (lagging, ngoài ISR)"
+isr.b1 -> b3: Đang catch up {style.stroke-dash: 4}
 ```
 
 ### ISR và `acks` Setting
@@ -153,15 +141,16 @@ Cấu hình `acks` của Producer quyết định bao nhiêu replicas phải xá
 
 **Replication Factor (RF)** = số bản sao của mỗi partition.
 
+```d2 title="Replication factor 3 — leader phân bố giữa các broker"
+direction: down
+p0: "Partition 0" {l: "Broker 1 — LEADER"; f2: Broker 2 follower; f3: Broker 3 follower; l -> f2; l -> f3}
+p1: "Partition 1" {l: "Broker 2 — LEADER"; f1: Broker 1 follower; f3: Broker 3 follower; l -> f1; l -> f3}
+p2: "Partition 2" {l: "Broker 3 — LEADER"; f1: Broker 1 follower; f2: Broker 2 follower; l -> f1; l -> f2}
 ```
-Replication Factor = 3:
 
-Partition 0: [Broker1 LEADER] [Broker2 follower] [Broker3 follower]
-Partition 1: [Broker2 LEADER] [Broker1 follower] [Broker3 follower]
-Partition 2: [Broker3 LEADER] [Broker1 follower] [Broker2 follower]
-
-→ Cluster có thể mất 2 brokers và vẫn hoạt động bình thường
-```
+<Callout type="warn">
+RF=3 không có nghĩa mất hai broker thì mọi thao tác vẫn bình thường. Với `acks=all` và `min.insync.replicas=2`, khi ISR chỉ còn một replica, producer sẽ bị từ chối ghi để bảo vệ độ bền.
+</Callout>
 
 **Rule of thumb:**
 - Dev/Test: RF = 1 (không cần HA)
@@ -201,46 +190,40 @@ public class KafkaTopicConfig {
 
 ### Kịch bản 1: Broker thông thường fail
 
-```
-Trước:
-Broker 1 (Leader P0): ✅ Active → serving reads/writes
-Broker 2 (Follower P0): ✅ ISR
-Broker 3 (Follower P0): ✅ ISR
-
-💥 Broker 1 fail
-
-Sau: (~seconds)
-Broker 2: 🆕 Elected as new Leader (vì trong ISR)
-Broker 3 (Follower P0): ✅ ISR
-ISR = {Broker2, Broker3}
-
-→ Downtime: thường < 30 giây (election + client reconnect)
-→ Không mất data (vì Broker 2 đã có toàn bộ data)
+```d2 title="Leader failover từ replica trong ISR"
+direction: right
+before: "Trước" {
+  b1: "Broker 1 — Leader P0\nActive, phục vụ read / write"
+  b2: "Broker 2 — Follower P0, ISR"
+  b3: "Broker 3 — Follower P0, ISR"
+}
+fail: "Broker 1 fail" {shape: diamond}
+after: "Sau election + client reconnect" {
+  b2: "Broker 2 — Leader P0 mới\nĐã có dữ liệu trong ISR"
+  b3: "Broker 3 — Follower P0, ISR"
+  isr: "ISR = Broker 2, Broker 3"
+}
+before -> fail -> after
+note: "Ví dụ downtime thường < 30 giây;\nthực tế phụ thuộc election / reconnect"
 ```
 
 ### Kịch bản 2: Broker lag → Bị loại khỏi ISR
 
-```mermaid
-sequenceDiagram
-    participant L as Leader (B1)
-    participant F as Follower (B2)
-    participant ISR as ISR Set
-
-    Note over F: B2 bị slow (GC pause, network lag)
-
-    L->>F: Replicate msg 100
-    F-->>L: 10 giây sau mới ack (quá chậm!)
-
-    Note over ISR: B2 lag > replica.lag.time.max.ms
-
-    L->>ISR: Remove B2 from ISR
-    Note over ISR: ISR = {B1, B3}
-
-    Note over F: B2 recover, catch up
-
-    F->>L: Fetched and synced up to msg 100
-    L->>ISR: Add B2 back to ISR
-    Note over ISR: ISR = {B1, B2, B3}
+```d2 title="Kịch bản 2: Broker lag → Bị loại khỏi ISR"
+shape: sequence_diagram
+L: "Leader (B1)"
+F: "Follower (B2)"
+ISR: "ISR Set"
+F.note1: "B2 bị slow (GC pause, network lag)"
+L -> F: "Replicate msg 100"
+F -> L: "10 giây sau mới ack (quá chậm!)" { style.stroke-dash: 4 }
+ISR.note2: "B2 lag > replica.lag.time.max.ms"
+L -> ISR: "Remove B2 from ISR"
+ISR.note3: "ISR = {B1, B3}"
+F.note4: "B2 recover, catch up"
+F -> L: "Fetched and synced up to msg 100"
+L -> ISR: "Add B2 back to ISR"
+ISR.note5: "ISR = {B1, B2, B3}"
 ```
 
 ---
@@ -251,15 +234,13 @@ sequenceDiagram
 
 Trong một Kafka cluster, có một broker đóng vai trò đặc biệt: **Controller**. Controller chịu trách nhiệm quản lý **metadata toàn cluster** — biết topic nào có bao nhiêu partition, mỗi partition có leader là broker nào, ISR gồm những broker nào. Khi một broker chết, Controller là người quyết định bầu lại leader cho các partition bị ảnh hưởng.
 
-```
-Cluster 5 broker — Broker 1 là Controller:
-
-  Broker 1 (Controller) ─── giữ metadata toàn cluster
-       │   • partition → leader mapping
-       │   • ISR set từng partition
-       │   • broker sống/chết
-       │
-  Broker 2, 3, 4, 5 ─── broker thường, nghe lệnh Controller
+```d2 title="Controller quản lý metadata của cluster"
+direction: down
+controller: "Broker 1 — Controller" {
+  metadata: "Metadata toàn cluster\nPartition → leader mapping\nISR từng partition\nBroker sống / chết"
+}
+brokers: "Broker 2, 3, 4, 5\nCác broker thường"
+controller -> brokers: Điều phối
 ```
 
 ### ZooKeeper — cách cũ (đã bị loại bỏ)
@@ -273,15 +254,18 @@ Trước Kafka 4.0, Kafka dùng **ZooKeeper** (một service riêng) để lưu 
 
 **KRaft (Kafka Raft)** đưa metadata vào **chính Kafka** — không cần ZooKeeper nữa. Một nhóm broker (gọi là **controller quorum**) dùng thuật toán **Raft** để đồng bộ metadata, tự bầu leader khi cần.
 
-```
-KRaft Mode:
-
-  Controller Quorum (3 broker chạy role controller):
-  Broker 1 (Active Controller) ◀──┐
-  Broker 2 (Controller)         ──┤  Raft consensus
-  Broker 3 (Controller)         ──┘  (metadata lưu trong internal topic __cluster_metadata)
-
-  Broker 4, 5 (broker thường) ─── chỉ chứa data partition, nghe Controller
+```d2 title="KRaft controller quorum và data broker"
+direction: down
+quorum: "Controller quorum" {
+  b1: Broker 1 — Active controller
+  b2: Broker 2 — Controller
+  b3: Broker 3 — Controller
+  b1 <-> b2: Raft consensus
+  b1 <-> b3: Raft consensus
+  metadata: "__cluster_metadata\nMetadata log"
+}
+data: "Broker 4, 5\nChứa data partition"
+quorum -> data: Metadata / điều phối
 ```
 
 ### So sánh ZooKeeper vs KRaft

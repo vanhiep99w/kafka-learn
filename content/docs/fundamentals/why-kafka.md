@@ -19,11 +19,14 @@ description: "So sánh Kafka với message queue truyền thống, điểm mạn
 
 ### Message Queue truyền thống (RabbitMQ, ActiveMQ)
 
-```
-Producer ──▶ [Queue] ──▶ Consumer
-                 │
-          (message bị xóa
-           sau khi đọc)
+```d2 title="Queue xóa message sau khi xử lý"
+direction: right
+p: Producer
+q: Queue
+c: Consumer
+p -> q -> c
+note: "Message bị xóa sau khi xử lý và ACK"
+q -> note: Lifecycle
 ```
 
 - Message bị xóa sau khi consumer đọc
@@ -33,11 +36,17 @@ Producer ──▶ [Queue] ──▶ Consumer
 
 ### Kafka (Event Log)
 
-```
-Producer ──▶ [Partition: 0, 1, 2, 3, 4...]   ──▶ Consumer A (offset 3)
-                                             ──▶ Consumer B (offset 1)
-                                             ──▶ Consumer C (offset 5)
-             (message lưu lại theo thời gian)
+```d2 title="Commit log và các vị trí đọc độc lập"
+direction: right
+p: Producer
+log: "Partition\n0, 1, 2, 3, 4…\nLưu theo retention"
+a: Consumer A — offset 3
+b: Consumer B — offset 1
+c: Consumer C — offset 5
+p -> log
+log -> a
+log -> b
+log -> c
 ```
 
 - Message **không bị xóa** sau khi đọc

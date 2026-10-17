@@ -24,19 +24,19 @@ Apache Kafka là một **distributed event streaming platform** — nền tảng
 - **Lưu trữ bền vững** (durable storage) các stream theo thứ tự và có khả năng replay lại
 - **Xử lý real-time** các stream khi chúng xảy ra
 
-```
-┌─────────────────────────────────────────────────────────┐
-│                   Apache Kafka Cluster                  │
-│                                                         │
-│  ┌──────────┐    ┌──────────────────┐    ┌──────────┐   │
-│  │ Producer │───▶│  Kafka Broker(s) │───▶│ Consumer │   │
-│  └──────────┘    │                  │    └──────────┘   │
-│                  │  Topic: orders   │                   │
-│  ┌──────────┐    │  ┌────┬────┬───┐ │    ┌──────────┐   │
-│  │ Producer │───▶│  │ P0 │ P1 │P2 │ │───▶│ Consumer │   │
-│  └──────────┘    │  └────┴────┴───┘ │    └──────────┘   │
-│                  └──────────────────┘                   │
-└─────────────────────────────────────────────────────────┘
+```d2 title="Producer, broker và consumer"
+direction: right
+p1: Producer 1
+p2: Producer 2
+cluster: Apache Kafka Cluster {
+  broker: "Kafka brokers" {topic: "Topic orders" {p0: P0; p1: P1; p2: P2}}
+}
+c1: Consumer 1
+c2: Consumer 2
+p1 -> cluster.broker
+p2 -> cluster.broker
+cluster.broker -> c1
+cluster.broker -> c2
 ```
 
 > [!IMPORTANT]
@@ -50,29 +50,22 @@ Apache Kafka là một **distributed event streaming platform** — nền tảng
 
 Trong các hệ thống truyền thống, khi số lượng services tăng lên, việc kết nối point-to-point trở nên rất phức tạp:
 
-```mermaid
-graph TB
-    subgraph "Point-to-Point: n x (n-1) / 2 connections"
-        A["Service A<br/>Order Service"]
-        B["Service B<br/>Inventory Service"]
-        C["Service C<br/>Notification Service"]
-        D["Service D<br/>Analytics Service"]
-        E["Service E<br/>Shipping Service"]
-    end
-
-    A <-->|"HTTP/gRPC"| B
-    A <-->|"HTTP/gRPC"| C
-    A <-->|"HTTP/gRPC"| D
-    B <-->|"HTTP/gRPC"| C
-    B <-->|"HTTP/gRPC"| E
-    C <-->|"HTTP/gRPC"| D
-    D <-->|"HTTP/gRPC"| E
-
-    style A fill:#f66,stroke:#333,color:#fff
-    style B fill:#f66,stroke:#333,color:#fff
-    style C fill:#f66,stroke:#333,color:#fff
-    style D fill:#f66,stroke:#333,color:#fff
-    style E fill:#f66,stroke:#333,color:#fff
+```d2 title="Trước khi có Kafka"
+direction: down
+g1: "Point-to-Point: n x (n-1) / 2 connections" {
+  A: "Service A\nOrder Service"
+  B: "Service B\nInventory Service"
+  C: "Service C\nNotification Service"
+  D: "Service D\nAnalytics Service"
+  E: "Service E\nShipping Service"
+}
+g1.A <-> g1.B: "HTTP/gRPC"
+g1.A <-> g1.C: "HTTP/gRPC"
+g1.A <-> g1.D: "HTTP/gRPC"
+g1.B <-> g1.C: "HTTP/gRPC"
+g1.B <-> g1.E: "HTTP/gRPC"
+g1.C <-> g1.D: "HTTP/gRPC"
+g1.D <-> g1.E: "HTTP/gRPC"
 ```
 
 **Vấn đề:**
@@ -83,33 +76,27 @@ graph TB
 
 ### Với Kafka
 
-```mermaid
-graph LR
-    subgraph Producers
-        A["Order Service"]
-        B["Payment Service"]
-        C["User Service"]
-    end
-
-    subgraph "Kafka Cluster"
-        K["Topics:<br/>orders<br/>payments<br/>user-events"]
-    end
-
-    subgraph Consumers
-        D["Inventory<br/>Service"]
-        E["Notification<br/>Service"]
-        F["Analytics<br/>Service"]
-    end
-
-    A -->|"orders"| K
-    B -->|"payments"| K
-    C -->|"user-events"| K
-
-    K --> D
-    K --> E
-    K --> F
-
-    style K fill:#4488ff,stroke:#333,color:#fff
+```d2 title="Với Kafka"
+direction: right
+g1: "Producers" {
+  A: "Order Service"
+  B: "Payment Service"
+  C: "User Service"
+}
+g2: "Kafka Cluster" {
+  K: "Topics:\norders\npayments\nuser-events"
+}
+g3: "Consumers" {
+  D: "Inventory\nService"
+  E: "Notification\nService"
+  F: "Analytics\nService"
+}
+g1.A -> g2.K: "orders"
+g1.B -> g2.K: "payments"
+g1.C -> g2.K: "user-events"
+g2.K -> g3.D
+g2.K -> g3.E
+g2.K -> g3.F
 ```
 
 **Lợi ích:**
@@ -122,39 +109,36 @@ graph LR
 
 ## Kiến trúc tổng thể
 
-```mermaid
-graph TB
-    subgraph Producers
-        P1[Web App]
-        P2[Mobile App]
-        P3[IoT Sensors]
-    end
-
-    subgraph Kafka Cluster
-        B1[Broker 1]
-        B2[Broker 2]
-        B3[Broker 3]
-        ZK[ZooKeeper / KRaft]
-    end
-
-    subgraph Consumers
-        C1[Analytics Service]
-        C2[Notification Service]
-        C3[Database Sink]
-    end
-
-    P1 --> B1
-    P2 --> B2
-    P3 --> B3
-    B1 <--> B2
-    B2 <--> B3
-    B1 <--> B3
-    ZK --- B1
-    ZK --- B2
-    ZK --- B3
-    B1 --> C1
-    B2 --> C2
-    B3 --> C3
+```d2 title="Kiến trúc tổng thể"
+direction: down
+g1: "Producers" {
+  P1: "Web App"
+  P2: "Mobile App"
+  P3: "IoT Sensors"
+}
+g2: "Kafka Cluster" {
+  B1: "Broker 1"
+  B2: "Broker 2"
+  B3: "Broker 3"
+  ZK: "ZooKeeper / KRaft"
+}
+g3: "Consumers" {
+  C1: "Analytics Service"
+  C2: "Notification Service"
+  C3: "Database Sink"
+}
+g1.P1 -> g2.B1
+g1.P2 -> g2.B2
+g1.P3 -> g2.B3
+g2.B1 <-> g2.B2
+g2.B2 <-> g2.B3
+g2.B1 <-> g2.B3
+g2.ZK -- g2.B1
+g2.ZK -- g2.B2
+g2.ZK -- g2.B3
+g2.B1 -> g3.C1
+g2.B2 -> g3.C2
+g2.B3 -> g3.C3
 ```
 
 ---
@@ -194,25 +178,14 @@ graph TB
 
 ## Kafka trong hệ sinh thái
 
-```
-┌─────────────────────────────────────────────────┐
-│              Kafka Ecosystem                    │
-│                                                 │
-│  ┌──────────────┐    ┌─────────────────────┐    │
-│  │ Kafka Core   │    │   Kafka Streams     │    │
-│  │ (Messaging)  │    │ (Stream Processing) │    │
-│  └──────────────┘    └─────────────────────┘    │
-│                                                 │
-│  ┌──────────────┐    ┌─────────────────────┐    │
-│  │ Kafka Connect│    │   Schema Registry   │    │
-│  │ (Connectors) │    │   (Data Contracts)  │    │
-│  └──────────────┘    └─────────────────────┘    │
-│                                                 │
-│  ┌──────────────┐    ┌─────────────────────┐    │
-│  │   ksqlDB     │    │   Kafka REST Proxy  │    │
-│  │ (SQL on Kafka│    │   (HTTP Interface)  │    │
-│  └──────────────┘    └─────────────────────┘    │
-└─────────────────────────────────────────────────┘
+```d2 title="Kafka ecosystem"
+grid-columns: 2
+core: "Kafka Core\nMessaging"
+streams: "Kafka Streams\nStream processing"
+connect: "Kafka Connect\nConnectors"
+schema: "Schema Registry\nData contracts"
+sql: "ksqlDB\nSQL on Kafka"
+rest: "Kafka REST Proxy\nHTTP interface"
 ```
 
 **Tích hợp phổ biến:**

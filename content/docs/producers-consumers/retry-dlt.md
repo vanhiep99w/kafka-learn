@@ -23,28 +23,16 @@ description: "Non-blocking retries với Spring Kafka: @RetryableTopic, exponent
 
 **Poison Pill** là message mà consumer không thể xử lý được — ném exception mỗi lần thử. Không có strategy, nó sẽ **block toàn bộ partition**.
 
-```
-┌─────────────────────────────────────────────────────────────────────────────────┐
-│                        THE POISON PILL PROBLEM                                  │
-├─────────────────────────────────────────────────────────────────────────────────┤
-│                                                                                 │
-│   Partition 0:                                                                  │
-│   ┌────────┬──────────┬────────┬────────┬────────┐                              │
-│   │ msg 1  │  msg 2   │ msg 3  │ msg 4  │ msg 5  │                              │
-│   │  ✅ OK │ 💥 POISON│  ⏳    │  ⏳    │  ⏳    │                              │
-│   └────────┴──────────┴────────┴────────┴────────┘                              │
-│                                                                                 │
-│   What happens without a strategy:                                              │
-│   → Consumer processes msg 1 ✅                                                 │
-│   → Consumer processes msg 2 💥 Exception!                                      │
-│   → Kafka retries msg 2 💥 Exception again!                                     │
-│   → Retry... retry... retry...                                                  │
-│   → msg 3, 4, 5 are STUCK FOREVER                                               │
-│   → Consumer lag grows indefinitely                                             │
-│   → Service appears stuck/unhealthy                                             │
-│                                                                                 │
-│   Impact: ONE bad message can halt ALL processing on that partition             │
-└─────────────────────────────────────────────────────────────────────────────────┘
+```d2 title="Poison pill chặn một partition"
+direction: right
+m1: msg 1 — OK
+m2: msg 2 — POISON
+waiting: "msg 3, 4, 5\nĐang chờ"
+m1 -> m2: Consumer xử lý
+m2 -> m2: Exception → retry → exception
+m2 -> waiting: Bị chặn khi chưa xử lý xong {style.stroke-dash: 4}
+impact: "Lag tăng\nService stuck / unhealthy\nMột bad message có thể chặn cả partition"
+waiting -> impact
 ```
 
 ---
@@ -53,17 +41,22 @@ description: "Non-blocking retries với Spring Kafka: @RetryableTopic, exponent
 
 Default behavior của Spring Kafka khi dùng `DefaultErrorHandler` với `FixedBackOff`:
 
-```mermaid
-graph LR
-    subgraph "Blocking Retry (problematic)"
-        P0["Partition 0"] --> M1["msg 1 ✅"]
-        M1 --> M2["msg 2 💥 FAIL"]
-        M2 -->|"Wait 1s, retry"| M2
-        M2 -->|"Wait 1s, retry"| M2
-        M2 -->|"Wait 1s, retry"| M2
-        M2 --> DLT["→ DLT"]
-        M2 --> M3["msg 3 ⏳ BLOCKED\n(waited 3+ seconds!)"]
-    end
+```d2 title="Blocking Retry (Default — Nguy hiểm)"
+direction: right
+g1: "Blocking Retry (problematic)" {
+  P0: "Partition 0"
+  M1: "msg 1 ✅"
+  M2: "msg 2 💥 FAIL"
+  DLT: "→ DLT"
+  M3: "msg 3 ⏳ BLOCKED\n(waited 3+ seconds!)"
+}
+g1.P0 -> g1.M1
+g1.M1 -> g1.M2
+g1.M2 -> g1.M2: "Wait 1s, retry"
+g1.M2 -> g1.M2: "Wait 1s, retry"
+g1.M2 -> g1.M2: "Wait 1s, retry"
+g1.M2 -> g1.DLT
+g1.M2 -> g1.M3
 ```
 
 **Vấn đề**: Trong thời gian retry msg 2 (3s), msg 3, 4, 5 bị chặn. Với nhiều messages poison, delay tích lũy cực lớn.
@@ -74,21 +67,29 @@ graph LR
 
 **Giải pháp**: Thay vì retry tại chỗ, chuyển message sang **secondary retry topic**. Main partition tiếp tục xử lý các messages khác!
 
-```mermaid
-graph LR
-    subgraph "Non-Blocking Retry (solution)"
-        P0["orders"] --> M1["msg 1 ✅"]
-        M1 --> M2["msg 2 💥 FAIL"]
-        M2 -->|"Move to retry"| RT0["orders-retry-0\n(wait 1s)"]
-        M1 --> M3["msg 3 ✅ NOT BLOCKED!"]
-        M3 --> M4["msg 4 ✅"]
-
-        RT0 -->|"Retry after 1s"| R2A["msg 2 💥 FAIL"]
-        R2A -->|"Move to retry"| RT1["orders-retry-1\n(wait 2s)"]
-
-        RT1 -->|"Retry after 2s"| R2B["msg 2 💥 FAIL"]
-        R2B -->|"All retries exhausted"| DLT["orders-dlt\n🚨 Dead Letter"]
-    end
+```d2 title="Non-Blocking Retries: Retry Topics"
+direction: right
+g1: "Non-Blocking Retry (solution)" {
+  P0: "orders"
+  M1: "msg 1 ✅"
+  M2: "msg 2 💥 FAIL"
+  RT0: "orders-retry-0\n(wait 1s)"
+  M3: "msg 3 ✅ NOT BLOCKED!"
+  M4: "msg 4 ✅"
+  R2A: "msg 2 💥 FAIL"
+  RT1: "orders-retry-1\n(wait 2s)"
+  R2B: "msg 2 💥 FAIL"
+  DLT: "orders-dlt\n🚨 Dead Letter"
+}
+g1.P0 -> g1.M1
+g1.M1 -> g1.M2
+g1.M2 -> g1.RT0: "Move to retry"
+g1.M1 -> g1.M3
+g1.M3 -> g1.M4
+g1.RT0 -> g1.R2A: "Retry after 1s"
+g1.R2A -> g1.RT1: "Move to retry"
+g1.RT1 -> g1.R2B: "Retry after 2s"
+g1.R2B -> g1.DLT: "All retries exhausted"
 ```
 
 **Key insight**: Main topic tiếp tục chạy. Message hỏng bị "parked" trong retry topics cho đến khi hết attempts hoặc thành công.
@@ -189,27 +190,23 @@ Với config `attempts = "4"` và topic `orders`:
 
 ### Sequence Diagram với Exponential Backoff
 
-```mermaid
-sequenceDiagram
-    participant Main as orders
-    participant R0 as orders-retry-0
-    participant R1 as orders-retry-1
-    participant R2 as orders-retry-2
-    participant DLT as orders-dlt
-
-    Main->>Main: Process msg 💥 Fail
-    Main->>R0: Move to retry-0 (immediately)
-
-    Note over R0: Wait 1s (initial delay)
-    R0->>R0: Process msg 💥 Fail
-    R0->>R1: Move to retry-1
-
-    Note over R1: Wait 2s (1s × 2)
-    R1->>R1: Process msg
-    Note over R1: 🎉 Success this time!
-
-    Note over R1: ✅ Message processed on retry 2
-    Note over Main: Main topic was NOT blocked during all this!
+```d2 title="Sequence Diagram với Exponential Backoff"
+shape: sequence_diagram
+Main: "orders"
+R0: "orders-retry-0"
+R1: "orders-retry-1"
+R2: "orders-retry-2"
+DLT: "orders-dlt"
+Main -> Main: "Process msg 💥 Fail"
+Main -> R0: "Move to retry-0 (immediately)"
+R0.note1: "Wait 1s (initial delay)"
+R0 -> R0: "Process msg 💥 Fail"
+R0 -> R1: "Move to retry-1"
+R1.note2: "Wait 2s (1s × 2)"
+R1 -> R1: "Process msg"
+R1.note3: "🎉 Success this time!"
+R1.note4: "✅ Message processed on retry 2"
+Main.note5: "Main topic was NOT blocked during all this!"
 ```
 
 ### Headers được ghi lại
@@ -234,26 +231,32 @@ public void handleRetry(
 
 ### Khi nào message đến DLT?
 
-```mermaid
-flowchart TD
-    A[Message arrives at main topic] --> B{Process success?}
-
-    B -->|Yes| C[✅ Commit offset, done]
-    B -->|No| D{Is exception retryable?}
-
-    D -->|No - ValidationException, etc| E[📨 Send directly to DLT\nSkip all retries!]
-    D -->|Yes| F[Send to retry-0]
-
-    F --> G{Retry success?}
-    G -->|Yes| C
-    G -->|No - attempt 1| H[Send to retry-1]
-
-    H --> I{Retry success?}
-    I -->|Yes| C
-    I -->|No - all attempts exhausted| J[📨 Send to DLT]
-
-    E --> K[🚨 DLT Handler]
-    J --> K
+```d2 title="Khi nào message đến DLT?"
+direction: down
+A: "Message arrives at main topic"
+B: "Process success?" { shape: diamond }
+C: "✅ Commit offset, done"
+D: "Is exception retryable?" { shape: diamond }
+E: "📨 Send directly to DLT\nSkip all retries!"
+F: "Send to retry-0"
+G: "Retry success?" { shape: diamond }
+H: "Send to retry-1"
+I: "Retry success?" { shape: diamond }
+J: "📨 Send to DLT"
+K: "🚨 DLT Handler"
+A -> B
+B -> C: "Yes"
+B -> D: "No"
+D -> E: "No - ValidationException, etc"
+D -> F: "Yes"
+F -> G
+G -> C: "Yes"
+G -> H: "No - attempt 1"
+H -> I
+I -> C: "Yes"
+I -> J: "No - all attempts exhausted"
+E -> K
+J -> K
 ```
 
 ### DLT Handler hoàn chỉnh
@@ -312,22 +315,16 @@ public class OrderDltHandler {
 
 Không phải mọi error đều nên retry. Phân loại đúng tránh lãng phí thời gian:
 
-```
-┌─────────────────────────────────────────────────────────────────────────────────┐
-│                    ERROR CLASSIFICATION                                         │
-├──────────────────────────────────────┬──────────────────────────────────────────┤
-│  ✅ RETRYABLE (Transient)            │  ❌ NON-RETRYABLE (Permanent)            │
-├──────────────────────────────────────┼──────────────────────────────────────────┤
-│  Database connection timeout         │  Validation error (bad data)             │
-│  Redis unavailable                   │  Deserialization/parse error             │
-│  External API rate limit (429)       │  Business rule violation                 │
-│  Network timeout                     │  Authentication/Authorization error      │
-│  Deadlock (retry may succeed)        │  Not Found (404) — won't appear          │
-│  Service temporarily down (503)      │  Data type mismatch                      │
-│                                      │  Missing required fields                 │
-│  → Retry with backoff                │  → Fail fast → DLT immediately           │
-└──────────────────────────────────────┴──────────────────────────────────────────┘
-```
+| Retryable — transient | Non-retryable — permanent |
+| --- | --- |
+| Database connection timeout | Validation error (bad data) |
+| Redis unavailable | Deserialization / parse error |
+| External API rate limit (429) | Business rule violation |
+| Network timeout | Authentication / authorization error |
+| Deadlock — retry có thể thành công | Not Found (404), nếu tài nguyên sẽ không xuất hiện |
+| Service temporarily down (503) | Data type mismatch |
+| | Missing required fields |
+| **Retry với backoff** | **Fail fast → DLT** |
 
 ```java
 @RetryableTopic(
@@ -481,19 +478,25 @@ public class RetryMonitor {
 
 ### Retry Strategy Decision Guide
 
-```mermaid
-flowchart TD
-    A[Exception during processing] --> B{Error type?}
-
-    B -->|Validation/Parse error| C["❌ Fail fast\n→ DLT immediately\nNo retries!"]
-    B -->|Transient DB/Network| D{Expected duration?}
-    B -->|External API down| E{Rate limited?}
-
-    D -->|Short < 30s| F["⏱ Short retry\n3 attempts, 1s backoff"]
-    D -->|Long > 30s| G["⏱ Long retry\n5 attempts, 30s-5min backoff"]
-
-    E -->|429 Rate limit| H["⏱ Respect Retry-After\nExponential backoff with jitter"]
-    E -->|503 Unavailable| I["⏱ Circuit breaker\n+ retry when service recovers"]
+```d2 title="Retry Strategy Decision Guide"
+direction: down
+A: "Exception during processing"
+B: "Error type?" { shape: diamond }
+C: "❌ Fail fast\n→ DLT immediately\nNo retries!"
+D: "Expected duration?" { shape: diamond }
+E: "Rate limited?" { shape: diamond }
+F: "⏱ Short retry\n3 attempts, 1s backoff"
+G: "⏱ Long retry\n5 attempts, 30s-5min backoff"
+H: "⏱ Respect Retry-After\nExponential backoff with jitter"
+I: "⏱ Circuit breaker\n+ retry when service recovers"
+A -> B
+B -> C: "Validation/Parse error"
+B -> D: "Transient DB/Network"
+B -> E: "External API down"
+D -> F: "Short < 30s"
+D -> G: "Long > 30s"
+E -> H: "429 Rate limit"
+E -> I: "503 Unavailable"
 ```
 
 ---

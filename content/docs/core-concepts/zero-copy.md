@@ -28,11 +28,13 @@ description: "Hiểu zero-copy, page cache, sendfile và vì sao Kafka phục v�
 
 Tên gọi dễ gây hiểu nhầm. “Zero-copy” không có nghĩa dữ liệu chưa từng được copy trong phần cứng hay không đi qua RAM. Ý chính là broker tránh đưa toàn bộ payload vào **user space** của JVM rồi lại copy xuống kernel socket buffer trước khi gửi.
 
-```text
-Mục tiêu: giảm một vòng đi qua user space của broker
-
-log segment / page cache  ───────────────►  socket  ───────────────►  network
-                         kernel xử lý                  NIC gửi đi
+```d2 title="Zero-copy: tránh payload trung gian trong user space"
+direction: right
+cache: Log segment / page cache
+socket: Socket
+network: Network
+cache -> socket: Kernel xử lý
+socket -> network: NIC gửi đi
 ```
 
 <Callout type="idea" title="Cách nhớ ngắn">
@@ -45,17 +47,16 @@ Một consumer gửi `FetchRequest` đến leader broker, yêu cầu record từ
 
 Nếu mỗi lần fetch broker phải đọc bytes từ kernel vào một `byte[]`/`ByteBuffer` của JVM, sau đó lại ghi bytes đó xuống kernel socket buffer, CPU sẽ tốn công copy dữ liệu lớn qua lại. Với nhiều consumer, follower replica và payload lớn, chi phí này nhanh chóng trở thành bottleneck.
 
-```mermaid
-sequenceDiagram
-  participant C as Consumer hoặc follower
-  participant B as Kafka broker
-  participant L as Log segment
-  participant N as Network socket
-
-  C->>B: Fetch(offset, maxBytes)
-  B->>L: Lấy batch record
-  B->>N: Gửi payload
-  N-->>C: TCP response
+```d2 title="Bài toán khi gửi dữ liệu từ disk ra network"
+shape: sequence_diagram
+C: "Consumer hoặc follower"
+B: "Kafka broker"
+L: "Log segment"
+N: "Network socket"
+C -> B: "Fetch(offset, maxBytes)"
+B -> L: "Lấy batch record"
+B -> N: "Gửi payload"
+N -> C: "TCP response" { style.stroke-dash: 4 }
 ```
 
 Điểm cần tối ưu là hai bước giữa `Log segment` và `Network socket`, không phải protocol fetch của consumer.
@@ -64,17 +65,17 @@ sequenceDiagram
 
 Trong mô hình I/O thông thường, ứng dụng thực hiện `read()` file rồi `write()` socket. Payload có thể đi qua nhiều buffer:
 
-```text
-1. Disk đọc block vào kernel page cache
-2. Kernel copy block sang user-space buffer của JVM/process
-3. JVM/process gọi write()
-4. Kernel copy payload sang socket buffer
-5. NIC DMA dữ liệu để truyền qua network
-
-┌─────────┐  copy   ┌─────────────┐  copy   ┌────────────┐
-│ Page    │ ──────► │ User-space  │ ──────► │ Socket     │ ───► NIC
-│ cache   │         │ buffer/JVM  │         │ buffer     │
-└─────────┘         └─────────────┘         └────────────┘
+```d2 title="Đường copy thông thường qua JVM"
+direction: right
+disk: Disk
+cache: Kernel page cache
+jvm: User-space buffer / JVM
+socket: Socket buffer
+nic: NIC / network
+disk -> cache: 1. Đọc block
+cache -> jvm: 2. Copy
+jvm -> socket: 3. write() + 4. Copy
+socket -> nic: 5. DMA để truyền
 ```
 
 Hai lần copy qua user space đặc biệt tốn kém khi dữ liệu đang có sẵn trong page cache. JVM còn phải cấp phát và quản lý buffer, khiến CPU và garbage collector có thêm áp lực.
@@ -83,20 +84,20 @@ Hai lần copy qua user space đặc biệt tốn kém khi dữ liệu đang có
 
 Kafka có thể dùng Java NIO `FileChannel.transferTo()`. Trên Linux và những môi trường hỗ trợ phù hợp, lời gọi này tận dụng primitive của hệ điều hành như `sendfile` để truyền bytes từ file/page cache đến socket mà không cần một bản payload trung gian trong JVM.
 
-```text
-1. Consumer gửi FetchRequest
-2. Broker xác định segment và byte range cần gửi
-3. Kafka gọi FileChannel.transferTo(..., socketChannel)
-4. Kernel chuyển dữ liệu từ page cache đến socket buffer
-5. NIC gửi dữ liệu đi
-
-┌─────────┐                  ┌────────────┐
-│ Page    │ ───────────────► │ Socket     │ ───► NIC ───► Consumer
-│ cache   │   kernel path    │ buffer     │
-└─────────┘                  └────────────┘
-       ▲
-       │
-  Kafka/JVM chỉ điều phối file range; không giữ bản payload trung gian
+```d2 title="FileChannel.transferTo điều phối kernel path"
+direction: right
+c: Consumer
+b: Kafka / JVM
+cache: Page cache
+socket: Socket buffer
+nic: NIC
+c -> b: 1. FetchRequest
+b -> cache: 2. Xác định segment + byte range
+b -> socket: 3. transferTo — chỉ điều phối {style.stroke-dash: 4}
+cache -> socket: 4. Kernel path
+socket -> nic: 5. Truyền dữ liệu
+nic -> c
+note: "JVM không giữ bản payload trung gian"
 ```
 
 Điều quan trọng là broker vẫn phải xây dựng phần protocol metadata của response, ví dụ header và thông tin record batch. Zero-copy chủ yếu tối ưu phần payload file có thể chuyển thẳng. Đừng hình dung toàn bộ response Kafka không hề chạm JVM.
@@ -107,13 +108,18 @@ Kafka có thể dùng Java NIO `FileChannel.transferTo()`. Trên Linux và nhữ
 
 Khi producer append record vào log, record thường đi vào page cache trước. Nếu consumer đọc record ngay sau đó, kernel có thể phục vụ dữ liệu trực tiếp từ RAM. Nếu cache miss, kernel mới phải đọc page từ disk.
 
-```mermaid
-flowchart LR
-  P[Producer append] --> PC[(OS page cache)]
-  PC --> D[(Disk log segment)]
-  C[Consumer fetch] --> PC
-  PC -->|cache hit| S[Socket / network]
-  D -->|cache miss: đọc lên cache| PC
+```d2 title="Vai trò của page cache"
+direction: right
+P: "Producer append"
+PC: "OS page cache" { shape: cylinder }
+D: "Disk log segment" { shape: cylinder }
+C: "Consumer fetch"
+S: "Socket / network"
+P -> PC
+PC -> D
+C -> PC
+PC -> S: "cache hit"
+D -> PC: "cache miss: đọc lên cache"
 ```
 
 Zero-copy phát huy hiệu quả nhất khi record cần gửi đã có trong page cache. Đây là tình huống phổ biến với event stream nóng: vừa được producer ghi vào, consumer đã fetch ngay.

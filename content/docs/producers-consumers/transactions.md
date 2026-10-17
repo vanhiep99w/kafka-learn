@@ -23,34 +23,19 @@ description: "Deep dive vào Kafka Transactions: Dual Write Problem, DB+Kafka tr
 
 Đây là bài toán xảy ra mọi lúc trong microservices: bạn muốn **lưu dữ liệu vào DB** VÀ **gửi event lên Kafka** trong cùng một "business operation".
 
-```
-┌─────────────────────────────────────────────────────────────────────────────────┐
-│                        THE DUAL WRITE PROBLEM                                   │
-├─────────────────────────────────────────────────────────────────────────────────┤
-│                                                                                 │
-│   Scenario: User places an Order                                                │
-│                                                                                 │
-│   What we want: Atomic                                                          │
-│   ┌──────────┐                                                                  │
-│   │  Order   │                                                                  │
-│   │ Service  │──── 1. Save Order to DB ───▶ ✅ Database                         │
-│   │          │──── 2. Send to Kafka ──────▶ ✅ Kafka                            │
-│   └──────────┘          ↑ Both must succeed or both must fail                   │
-│                                                                                 │
-│   What can go wrong:                                                            │
-│                                                                                 │
-│   ❌ Case 1: DB success, Kafka fails                                            │
-│      Order saved in DB, but no downstream service knows!                        │
-│      Inventory not updated, email not sent, payment not initiated               │
-│                                                                                 │
-│   ❌ Case 2: Kafka success, DB fails (after rollback)                           │
-│      Event sent to Kafka, but no order in DB                                    │
-│      Downstream services process a "ghost order"                                │
-│                                                                                 │
-│   ❌ Case 3: Process crashes between step 1 and step 2                          │
-│      DB committed, Kafka never sent                                             │
-│      Silent data loss                                                           │
-└─────────────────────────────────────────────────────────────────────────────────┘
+```d2 title="Dual write không atomic giữa DB và Kafka"
+direction: right
+service: Order Service
+db: Database
+kafka: Kafka
+service -> db: 1. Save order
+service -> kafka: 2. Send event
+cases: "Các cửa sổ lỗi" {
+  a: "DB thành công, Kafka lỗi\nOrder tồn tại nhưng inventory / email / payment không biết"
+  b: "Kafka thành công, DB rollback\nDownstream xử lý ghost order"
+  c: "Crash giữa bước 1 và 2\nDB commit, Kafka chưa send — mất event"
+}
+note: "Mong muốn: cả hai thành công hoặc cả hai thất bại\nHai thao tác độc lập không tự có atomicity"
 ```
 
 > [!CAUTION]
@@ -64,19 +49,21 @@ Spring Kafka cho phép **synchronize** Kafka transaction với DB transaction. �
 
 ### Cách hoạt động
 
-```mermaid
-flowchart LR
-    subgraph "@Transactional Method"
-        A[Begin DB Tx] --> B[DB Operations]
-        B --> C["Send to Kafka\n(Tx Pending - invisible)"]
-        C --> D{DB Commit?}
-    end
-
-    D -->|Success| E[Kafka Tx Commit\nMsg visible]
-    D -->|Failure| F[DB Rollback\nKafka Tx Abort\nMsg discarded]
-
-    style E fill:#90EE90
-    style F fill:#FFB6C1
+```d2 title="Cách hoạt động"
+direction: right
+g1: "@Transactional Method" {
+  A: "Begin DB Tx"
+  B: "DB Operations"
+  C: "Send to Kafka\n(Tx Pending - invisible)"
+  D: "DB Commit?" { shape: diamond }
+}
+E: "Kafka Tx Commit\nMsg visible"
+F: "DB Rollback\nKafka Tx Abort\nMsg discarded"
+g1.A -> g1.B
+g1.B -> g1.C
+g1.C -> g1.D
+g1.D -> E: "Success"
+g1.D -> F: "Failure"
 ```
 
 ### Setup
@@ -128,47 +115,42 @@ public class OrderService {
 
 ### Happy Path
 
-```mermaid
-sequenceDiagram
-    participant Client
-    participant App as Order Service
-    participant DB as Database
-    participant Kafka as Kafka Broker
-    participant Consumer as Downstream Consumer
-
-    Client->>App: POST /orders
-    App->>DB: BEGIN TRANSACTION
-    App->>DB: INSERT INTO orders (id='ord-123', ...)
-    App->>Kafka: Begin Kafka Tx (txId=tx-order-1-0)
-    App->>Kafka: ProducerRecord(topic=orders.created, key=ord-123)
-    Note right of Kafka: Message stored but PENDING<br/>consumers see nothing yet
-
-    App->>DB: COMMIT ✅
-    App->>Kafka: COMMIT Transaction ✅
-    Note right of Kafka: Message now VISIBLE
-
-    Kafka-->>Consumer: Deliver message
-    App-->>Client: 201 Created
+```d2 title="Happy Path"
+shape: sequence_diagram
+Client: "Client"
+App: "Order Service"
+DB: "Database"
+Kafka: "Kafka Broker"
+Consumer: "Downstream Consumer"
+Client -> App: "POST /orders"
+App -> DB: "BEGIN TRANSACTION"
+App -> DB: "INSERT INTO orders (id='ord-123', ...)"
+App -> Kafka: "Begin Kafka Tx (txId=tx-order-1-0)"
+App -> Kafka: "ProducerRecord(topic=orders.created, key=ord-123)"
+Kafka.note1: "Message stored but PENDING\nconsumers see nothing yet"
+App -> DB: "COMMIT ✅"
+App -> Kafka: "COMMIT Transaction ✅"
+Kafka.note2: "Message now VISIBLE"
+Kafka -> Consumer: "Deliver message" { style.stroke-dash: 4 }
+App -> Client: "201 Created" { style.stroke-dash: 4 }
 ```
 
 ### Error Path
 
-```mermaid
-sequenceDiagram
-    participant App as Order Service
-    participant DB as Database
-    participant Kafka as Kafka Broker
-
-    App->>DB: BEGIN TRANSACTION
-    App->>DB: INSERT INTO orders (id='ord-123', ...)
-    App->>Kafka: ProducerRecord(topic=orders.created, ...)
-    Note right of Kafka: Message stored PENDING
-
-    Note over App: 💥 Exception! (e.g. inventory check fails)
-    App->>DB: ROLLBACK ❌
-    App->>Kafka: ABORT Transaction ❌
-    Note right of Kafka: Message DISCARDED
-    Note over App: ✅ Consistent — neither DB nor Kafka has the data
+```d2 title="Error Path"
+shape: sequence_diagram
+App: "Order Service"
+DB: "Database"
+Kafka: "Kafka Broker"
+App -> DB: "BEGIN TRANSACTION"
+App -> DB: "INSERT INTO orders (id='ord-123', ...)"
+App -> Kafka: "ProducerRecord(topic=orders.created, ...)"
+Kafka.note1: "Message stored PENDING"
+App.note2: "💥 Exception! (e.g. inventory check fails)"
+App -> DB: "ROLLBACK ❌"
+App -> Kafka: "ABORT Transaction ❌"
+Kafka.note3: "Message DISCARDED"
+App.note4: "✅ Consistent — neither DB nor Kafka has the data"
 ```
 
 ---
@@ -178,20 +160,14 @@ sequenceDiagram
 > [!WARNING]
 > **Vấn đề không thể tránh khỏi với 1PC**: Nếu DB commit **thành công** nhưng Kafka commit **thất bại** (network down, broker crash), bạn vẫn có inconsistency.
 
-```
-Timeline:
-──────────────────────────────────────────────────────────────────────
-  DB Commit ✅ ──▶ Kafka Commit Request ──▶ 💥 NETWORK FAILURE ──▶ ???
-──────────────────────────────────────────────────────────────────────
-
-Result:
-  - Database: Order exists (committed)
-  - Kafka: Message NOT delivered (broker didn't receive commit)
-
-Impact:
-  - Inventory service never received "order created" event
-  - No email sent to customer
-  - System in inconsistent state — very hard to detect!
+```d2 title="Cửa sổ lỗi sau DB commit"
+direction: right
+db: DB COMMIT thành công
+request: Kafka commit request
+failure: Network failure
+state: "Trạng thái không chắc chắn\nDB có order; commit Kafka có thể chưa tới broker"
+impact: "Nếu transaction Kafka không commit:\ninventory không nhận event, không gửi email\nHai hệ thống không nhất quán"
+db -> request -> failure -> state -> impact
 ```
 
 **Xác suất xảy ra**: Nhỏ nhưng không phải zero. Với traffic cao (millions/day), điều này xảy ra.
@@ -204,33 +180,26 @@ Impact:
 
 **Ý tưởng cốt lõi**: Thay vì gửi message *trực tiếp* lên Kafka, lưu message vào một **bảng `outbox`** trong *cùng database transaction* với business data. Một poller riêng đọc bảng này và gửi lên Kafka.
 
-```
-┌─────────────────────────────────────────────────────────────────────────────────┐
-│                    TRANSACTIONAL OUTBOX PATTERN                                 │
-├─────────────────────────────────────────────────────────────────────────────────┤
-│                                                                                 │
-│  PHASE 1: Business Transaction (Atomic in same DB)                              │
-│  ┌───────────────────────────────────────────────────────────┐                  │
-│  │  BEGIN TRANSACTION                                        │                  │
-│  │    INSERT INTO orders (id, ...) VALUES (...)              │                  │
-│  │    INSERT INTO outbox (event_id, topic, payload, status)  │ ← KEY!           │
-│  │  COMMIT                                                   │                  │
-│  └───────────────────────────────────────────────────────────┘                  │
-│                   ↓                                                             │
-│  PHASE 2: Outbox Poller (separate process)                                      │
-│  ┌───────────────────────────────────────────────────────────┐                  │
-│  │  SELECT * FROM outbox WHERE status = 'PENDING'            │                  │
-│  │  → For each row:                                          │                  │
-│  │      kafkaTemplate.send(topic, payload)                   │                  │
-│  │      UPDATE outbox SET status = 'SENT'                    │                  │
-│  └───────────────────────────────────────────────────────────┘                  │
-│                                                                                 │
-│  Why this works:                                                                │
-│  - Phase 1: DB is ACID — both orders + outbox row committed atomically          │
-│  - Phase 2: At-least-once delivery (poller can retry safely)                    │
-│  - If broker down → rows stay PENDING → retry later                             │
-│  - No "last-mile" problem!                                                      │
-└─────────────────────────────────────────────────────────────────────────────────┘
+```d2 title="Transactional outbox — atomic DB write, at-least-once publish"
+direction: right
+tx: "Phase 1 — một DB transaction ACID" {
+  begin: BEGIN
+  orders: INSERT orders
+  outbox: INSERT outbox — event_id, topic, payload, PENDING
+  commit: COMMIT
+  begin -> orders -> outbox -> commit
+}
+poller: "Phase 2 — process riêng" {
+  select: SELECT outbox WHERE status = PENDING
+  send: kafkaTemplate.send — chờ broker ACK
+  mark: UPDATE outbox SET status = SENT
+  select -> send -> mark
+}
+kafka: Kafka
+tx.commit -> poller.select
+poller.send -> kafka
+poller.send -> poller.select: Broker down → giữ PENDING, retry {style.stroke-dash: 4}
+note: "Publish at-least-once — crash sau send, trước mark có thể duplicate\nConsumer cần idempotency"
 ```
 
 ---
@@ -382,21 +351,28 @@ public class OutboxPoller {
 
 ### Advanced: Debezium CDC (Production Alternative)
 
-```mermaid
-graph LR
-    subgraph "Outbox Polling (Simple)"
-        A1[App] -->|"INSERT orders\nINSERT outbox"| DB1[(PostgreSQL)]
-        Poller -->|"SELECT PENDING\nevery 1s"| DB1
-        Poller -->|"Send"| K1[Kafka]
-        Note1["⚠️ 1s polling delay\n⚠️ DB polling load"]
-    end
-
-    subgraph "Debezium CDC (Production)"
-        A2[App] -->|"INSERT orders\nINSERT outbox"| DB2[(PostgreSQL)]
-        DB2 -->|"WAL/binlog\nchange events"| Debezium
-        Debezium -->|"< 100ms latency"| K2[Kafka]
-        Note2["✅ Near-realtime\n✅ Zero polling overhead\n✅ At-least-once guaranteed"]
-    end
+```d2 title="Advanced: Debezium CDC (Production Alternative)"
+direction: right
+g1: "Outbox Polling (Simple)" {
+  A1: "App"
+  DB1: "PostgreSQL" { shape: cylinder; icon: ../../assets/d2/postgresql.svg }
+  Poller: "Poller"
+  K1: "Kafka"
+  Note1: "⚠️ 1s polling delay\n⚠️ DB polling load"
+}
+g2: "Debezium CDC (Production)" {
+  A2: "App"
+  DB2: "PostgreSQL" { shape: cylinder; icon: ../../assets/d2/postgresql.svg }
+  Debezium: "Debezium"
+  K2: "Kafka"
+  Note2: "✅ Near-realtime\n✅ Zero polling overhead\n✅ At-least-once guaranteed"
+}
+g1.A1 -> g1.DB1: "INSERT orders\nINSERT outbox"
+g1.Poller -> g1.DB1: "SELECT PENDING\nevery 1s"
+g1.Poller -> g1.K1: "Send"
+g2.A2 -> g2.DB2: "INSERT orders\nINSERT outbox"
+g2.DB2 -> g2.Debezium: "WAL/binlog\nchange events"
+g2.Debezium -> g2.K2: "< 100ms latency"
 ```
 
 ---
@@ -405,28 +381,22 @@ graph LR
 
 Khi bạn cần **đọc từ một Kafka topic, transform, và ghi vào topic khác** một cách atomic — Kafka transactions hoạt động hoàn hảo.
 
-```mermaid
-sequenceDiagram
-    participant Input as orders-raw
-    participant App as Enrichment Service
-    participant Output as orders-enriched
-    participant Offsets as __consumer_offsets
-
-    App->>Input: poll()
-    Input-->>App: Messages [offset 0-10]
-
-    Note over App: Begin Kafka Transaction
-
-    App->>App: Enrich with customer data
-    App->>Output: send(enriched) [in tx]
-    App->>Offsets: sendOffsetsToTransaction([0-10]) [in tx]
-
-    Note over App: Commit Transaction
-
-    App->>Output: Commit ✅
-    App->>Offsets: Commit ✅
-
-    Note over Output,Offsets: ATOMIC! Both writes succeed or both fail<br/>No orphan messages, no re-processing
+```d2 title="Consume-Transform-Produce (Kafka → Kafka)"
+shape: sequence_diagram
+Input: "orders-raw"
+App: "Enrichment Service"
+Output: "orders-enriched"
+Offsets: "__consumer_offsets"
+App -> Input: "poll()"
+Input -> App: "Messages [offset 0-10]" { style.stroke-dash: 4 }
+App.note1: "Begin Kafka Transaction"
+App -> App: "Enrich with customer data"
+App -> Output: "send(enriched) [in tx]"
+App -> Offsets: "sendOffsetsToTransaction([0-10]) [in tx]"
+App.note2: "Commit Transaction"
+App -> Output: "Commit ✅"
+App -> Offsets: "Commit ✅"
+Output.note3: "Output / Offsets: ATOMIC! Both writes succeed or both fail\nNo orphan messages, no re-processing"
 ```
 
 ```java
@@ -471,41 +441,32 @@ public class OrderEnrichmentService {
 
 Khi dùng transactional producer, có một vấn đề tinh tế nhưng nguy hiểm: **producer "xác sống" (zombie)**. Đây là kịch bản:
 
-```
-Producer P1 bắt đầu transaction T1 (transactional.id = "tx-order")
-   │
-   ▼
-P1 bị network glitch,Coordinator tưởng P1 chết
-   │
-   ▼
-Coordinator thu hồi transactional.id "tx-order"
-   → khởi tạo lại cho Producer P2 (instance mới)
-   │
-   ▼
-P2 bắt đầu transaction T2 với cùng transactional.id
-   │
-   ▼
-Đột nhiên P1 "sống lại" (network khôi phục)
-   → P1 cố commit T1 (transaction CŨ)
-   → Nếu không có bảo vệ, T1 có thể đè lên T2 → data hỏng!
+```d2 title="Zombie producer và transactional.id"
+direction: right
+p1: "P1 bắt đầu T1\ntransactional.id = tx-order"
+glitch: Network glitch — coordinator coi P1 đã chết
+p2: P2 init cùng transactional.id — bắt đầu T2
+zombie: P1 trở lại và cố commit T1 cũ
+risk: "Cần fencing để chặn producer cũ\nKhông cho P1 can thiệp transaction mới"
+p1 -> glitch -> p2 -> zombie -> risk
 ```
 
 ### Cơ chế Epoch Fencing
 
 Kafka giải quyết bằng **epoch** — một số tăng dần mỗi khi `transactional.id` được khởi tạo lại. Broker chỉ chấp nhận request từ producer có **epoch cao nhất**. Request từ epoch cũ hơn bị **từ chối (fenced)**:
 
-```
-transactional.id = "tx-order"
-
-  Epoch 0: P1 init → broker ghi "tx-order" → epoch 0
-  P1 gửi message với epoch 0 → broker chấp nhận ✅
-
-  P1 tưởng chết → P2 init → broker bump epoch lên 1
-  P2 gửi message với epoch 1 → broker chấp nhận ✅
-
-  P1 "sống lại", cố commit với epoch 0
-  → broker: "epoch 0 < epoch 1 hiện tại" → TỪ CHỐI (fenced) ❌
-  → P1 nhận ProducerFencedException → phải tự close
+```d2 title="Producer epoch fencing"
+shape: sequence_diagram
+p1: Producer P1
+b: Broker — tx-order
+p2: Producer P2
+p1 -> b: Init — epoch 0
+p1 -> b: Send epoch 0 — chấp nhận
+p2 -> b: Init cùng tx-order — bump epoch lên 1
+p2 -> b: Send epoch 1 — chấp nhận
+p1 -> b: Cố commit epoch 0 sau khi trở lại
+b -> p1: ProducerFencedException — epoch 0 < 1
+p1.note: Phải close producer bị fenced
 ```
 
 ### Cấu hình

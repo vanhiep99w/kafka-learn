@@ -202,14 +202,12 @@ KTable<String, OrderEvent> highestOrderPerCustomer = orders
 
 ### Tumbling Window — Cửa sổ không overlap
 
-```
-Tumbling Window (size=5 min):
-
-Timeline: ──────────────────────────────────────────────────────────
-          [   Window 1   ][   Window 2   ][   Window 3   ]
-          00:00─────05:00 05:00────10:00  10:00────15:00
-
-Events:   🟦🟦  🟦🟦🟦      🟦   🟦🟦        🟦🟦🟦🟦
+```d2 title="Tumbling windows: không chồng lấn"
+direction: right
+w1: "Window 1\n00:00–05:00\n5 events minh họa"
+w2: "Window 2\n05:00–10:00\n3 events minh họa"
+w3: "Window 3\n10:00–15:00\n4 events minh họa"
+w1 -> w2 -> w3: Event time
 ```
 
 ```java
@@ -234,13 +232,16 @@ ordersPerWindow
 
 ### Hopping Window — Cửa sổ overlap
 
-```
-Hopping Window (size=10 min, advance=5 min):
-
-Timeline: ──────────────────────────────────────────────────────────
-          [─────── W1 ───────]
-                  [─────── W2 ───────]
-                          [─────── W3 ───────]
+```d2 title="Hopping windows: size 10 phút, advance 5 phút"
+grid-columns: 4
+head: Window
+h0: "00:00–05:00"; h1: "05:00–10:00"; h2: "10:00–15:00"
+a: W1
+w10: Trong W1; w11: Trong W1; w12: Ngoài W1
+b: W2
+w20: Ngoài W2; w21: Trong W2; w22: Trong W2
+c: "W3 — bắt đầu 10:00"
+w30: Ngoài W3; w31: Ngoài W3; w32: "Trong W3\nKéo dài đến 20:00"
 ```
 
 ```java
@@ -256,15 +257,14 @@ KTable<Windowed<String>, Long> rollingOrders = orders
 
 ### Session Window — Activity-based
 
-```
-Session Window (inactivity gap=5 min):
-
-User Activity:
-──● ●───────────────●────● ● ●──────────────────●────
-  [Session 1 ]      [   Session 2   ]            [S3]
-  (2 events)        (3 events)                   (1)
-
-Nếu không có event trong 5 phút → session kết thúc
+```d2 title="Session windows theo inactivity gap"
+direction: right
+s1: "Session 1\n2 events"
+s2: "Session 2\n3 events"
+s3: "Session 3\n1 event"
+s1 -> s2: Không có event quá gap 5 phút
+s2 -> s3: Không có event quá gap 5 phút
+note: "Các event cách nhau trong inactivity gap\nđược gom vào cùng session"
 ```
 
 ```java
@@ -284,24 +284,16 @@ KTable<Windowed<String>, Long> sessionActivity = clickEvents
 
 Enrich streaming events với lookup table data (thường là reference data):
 
-```
-┌─────────────────────────────────────────────────────────────────────────────────┐
-│                    KSTREAM-KTABLE JOIN                                          │
-├─────────────────────────────────────────────────────────────────────────────────┤
-│                                                                                 │
-│  KStream (orders):                                                              │
-│  ──[orderId=1, customerId=C1]──[orderId=2, customerId=C3]──▶                    │
-│                                                                                 │
-│  KTable (customers):                                                            │
-│  C1 → {name: "Alice", tier: "GOLD"}                                             │
-│  C2 → {name: "Bob",   tier: "SILVER"}                                           │
-│  C3 → {name: "Carol", tier: "GOLD"}                                             │
-│                                                                                 │
-│  Result (joined):                                                               │
-│  ──[order+customerInfo for C1]──[order+customerInfo for C3]──▶                  │
-│                                                                                 │
-│  Note: LEFT JOIN semantics — if customer not in KTable, joiner returns null     │
-└─────────────────────────────────────────────────────────────────────────────────┘
+```d2 title="KStream–KTable join enrich order"
+direction: right
+orders: "KStream — orders\nOrder 1: customerId C1\nOrder 2: customerId C3"
+customers: "KTable — customers\nC1: Alice, GOLD\nC2: Bob, SILVER\nC3: Carol, GOLD"
+join: Join theo customerId
+result: "Order + customerInfo\nOrder 1 + Alice\nOrder 2 + Carol"
+orders -> join
+customers -> join: Lookup state mới nhất
+join -> result
+note: "Với leftJoin: customer không có trong table\nthì joiner nhận null ở phía customer"
 ```
 
 ```java
@@ -572,13 +564,15 @@ spring:
         # Kafka will automatically rebalance partitions across instances
 ```
 
-```
-Scaling example (12 partitions on "orders" topic):
-┌────────────────────────────────────────────────────────────────────┐
-│  Instance 1 (4 threads)    Instance 2 (4 threads)    Instance 3    │
-│  Partitions: 0,1,2,3       Partitions: 4,5,6,7       P: 8,9,10,11 │
-│  State Store: partial      State Store: partial       Partial       │
-└────────────────────────────────────────────────────────────────────┘
+```d2 title="Scale Kafka Streams trên 12 partition"
+direction: down
+topic: "orders — 12 partitions"
+i1: "Instance 1 — 4 threads\nP0,1,2,3\nState store: partial"
+i2: "Instance 2 — 4 threads\nP4,5,6,7\nState store: partial"
+i3: "Instance 3\nP8,9,10,11\nState store: partial"
+topic -> i1
+topic -> i2
+topic -> i3
 ```
 
 ### Monitoring

@@ -45,23 +45,26 @@ Câu hỏi này kiểm tra một điều: bạn có hiểu partition **vừa là
 
 Trước khi nói "tại sao nhiều lại hại", phải hiểu rõ "tại sao nhiều lại tốt". Giả sử bạn có topic `orders` với **1 partition**:
 
-```
-Topic: orders — 1 partition
-
-Producer ──▶ [ Partition 0 ] ──▶ Consumer 1
-            (tất cả message)
+```d2 title="Một partition chỉ có một consumer active trong group"
+direction: right
+p: Producer
+partition: Partition 0 — tất cả message
+c: Consumer 1
+p -> partition -> c
 ```
 
 Vấn đề: chỉ có **đúng 1 consumer** được đọc partition này (quy tắc Kafka: 1 partition → tối đa 1 consumer trong group). Dù bạn có 10 máy chủ, vẫn chỉ 1 máy làm việc. Producer ghi nhanh đến đâu, consumer xử lý kịp đến đó — nếu consumer chậm hơn producer, message chất đống.
 
 Bây giờ tăng lên **3 partition**:
 
-```
-Topic: orders — 3 partitions
-
-Producer ──┬─▶ [ Partition 0 ] ──▶ Consumer 1
-           ├─▶ [ Partition 1 ] ──▶ Consumer 2
-           └─▶ [ Partition 2 ] ──▶ Consumer 3
+```d2 title="Ba partition cho ba consumer active"
+direction: right
+p: Producer
+p0: Partition 0; p1: Partition 1; p2: Partition 2
+c1: Consumer 1; c2: Consumer 2; c3: Consumer 3
+p -> p0 -> c1
+p -> p1 -> c2
+p -> p2 -> c3
 ```
 
 Bây giờ **3 consumer chạy song song**, mỗi cái xử lý 1/3 traffic. Throughput tổng **tăng 3 lần**. Đây chính là lý do người ta nói "thêm partition → nhanh hơn".
@@ -83,19 +86,14 @@ Có 3 lý do khiến suy nghĩ này phổ biến:
 
 Cái bẫy nằm ở: chi phí **tích lũy tuyến tính** theo số partition, nhưng lợi ích **chạm trần** khi đã đủ consumer. Biểu đồ quan hệ:
 
-```
-Throughput        Chi phí (metadata, file handle, election)
-    ↑                          ↑
-    │        ┌──── trần         │                          ╱
-    │       ╱                   │                        ╱
-    │      ╱                    │                      ╱
-    │    ╱                      │                    ╱
-    │  ╱                        │                  ╱
-    │╱                          │                ╱
-    └────────────▶ #partition   └────────────▶ #partition
-
-  → Lợi ích chạm trần         → Chi phí tăng không ngừng
-     khi đủ consumer             theo số partition
+```d2 title="Lợi ích throughput có trần, chi phí partition vẫn tăng"
+direction: right
+count: Tăng số partition
+benefit: "Throughput tăng tới trần\nĐủ consumer hoặc chạm bottleneck khác"
+cost: "Chi phí tiếp tục tăng\nMetadata, file handles, election"
+count -> benefit: Lợi ích
+count -> cost: Chi phí
+note: "Sơ đồ định tính — không phải benchmark"
 ```
 
 5 mục tiếp theo sẽ mổ xẻ từng loại chi phí ẩn, để bạn thấy "thêm 1 partition thì cái gì tăng theo".
@@ -178,17 +176,13 @@ Mỗi partition có **1 leader** (broker nhận đọc/ghi) và **N-1 follower**
 
 Quan trọng: **mỗi partition có election riêng**. Khi broker chết, **tất cả partition** mà broker đó làm leader đều phải elect lại **cùng lúc**:
 
-```
-Broker 3 chết — nó là leader của 3.000 partition:
-   ┌─────────────────────────────────────────────┐
-   │ Election partition 1  → chọn follower A     │
-   │ Election partition 2  → chọn follower B     │
-   │ Election partition 3  → chọn follower C     │
-   │ ...                                         │
-   │ Election partition 3000 → chọn follower Z   │
-   └─────────────────────────────────────────────┘
-   → 3.000 election đồng thời → Controller quá tải
-   → Trong lúc election, 3.000 partition này KHÔNG đọc ghi được
+```d2 title="Broker fail tạo nhiều leader election đồng thời"
+direction: right
+fail: Broker 3 fail — leader 3000 partition
+election: "Controller elect leader" {p1: Partition 1 → follower A; p2: Partition 2 → follower B; p3: Partition 3 → follower C; pn: Partition 3000 → follower Z}
+overload: "3000 election\nController có thể quá tải"
+unavailable: "Các partition đang election\nTạm không đọc / ghi được"
+fail -> election -> overload -> unavailable
 ```
 
 | Số partition phải elect lại | Thời gian phục hồi điển hình |
@@ -251,24 +245,19 @@ Topic 200 partition, 1.000 msg/s:
 
 Đây là lý do quan trọng nhất để **không** "tạo cho chắc". Vòng đời số partition:
 
-```
-Tạo topic với 6 partition
-     │
-     ▼
-Cần thêm throughput → ALTER topic tăng lên 12 partition   ✅ CHO PHÉP
-     │
-     ▼
-Traffic giảm, muốn giảm xuống 6 partition?
-     │
-     ▼
-❌ KHÔNG THỂ. Kafka không hỗ trợ giảm partition.
-     │
-     ▼
-Cách duy nhất: tạo topic mới (ít partition hơn)
-              → migrate data sang
-              → đổi producer/consumer trỏ sang topic mới
-              → xóa topic cũ
-   → rất đắt, có downtime logic
+```d2 title="Kafka chỉ hỗ trợ tăng partition count"
+direction: right
+six: Topic 6 partition
+twelve: ALTER lên 12 partition — được phép
+reduce: "Muốn giảm lại 6?" {shape: diamond}
+new: Tạo topic mới ít partition hơn
+migrate: Migrate data
+switch: Đổi producer / consumer sang topic mới
+delete: Xóa topic cũ
+six -> twelve -> reduce
+reduce -> new: Không hỗ trợ giảm trực tiếp
+new -> migrate -> switch -> delete
+note: "Migration tốn chi phí, cần kiểm soát ordering / downtime logic"
 ```
 
 ### Tại sao không giảm được?
@@ -336,13 +325,19 @@ Cần cho consumer:   60 / 10 =  6 partition (để consumer bắt kịp)
 
 ## 11. Quy trình 4 bước chọn số partition
 
-```mermaid
-flowchart TD
-    A["Bước 1: Ước lượng throughput producer/consumer"] --> B["Bước 2: Chia cho ~10 MB/s"]
-    B --> C["Bước 3: Lấy max, nhân 1.5–2x headroom"]
-    C --> D{Bước 4: Vượt 4.000/broker?}
-    D -->|"Không"| E["✅ Chốt số partition"]
-    D -->|"Có"| F["⚠️ Tách topic hoặc tăng throughput/partition"]
+```d2 title="11. Quy trình 4 bước chọn số partition"
+direction: down
+A: "Bước 1: Ước lượng throughput producer/consumer"
+B: "Bước 2: Chia cho ~10 MB/s"
+C: "Bước 3: Lấy max, nhân 1.5–2x headroom"
+D: "Bước 4: Vượt 4.000/broker?" { shape: diamond }
+E: "✅ Chốt số partition"
+F: "⚠️ Tách topic hoặc tăng throughput/partition"
+A -> B
+B -> C
+C -> D
+D -> E: "Không"
+D -> F: "Có"
 ```
 
 **Bước 1 — Ước lượng throughput.** Đây là bước khó nhất. Nếu không có số liệu, hãy ước lượng thận trọng từ dữ liệu lịch sử hoặc nghiệp vụ (vd: "5.000 order/giờ, mỗi order ~2KB = ~10KB/s" — con số thấp hơn bạn nghĩ).
@@ -370,27 +365,17 @@ Mọi thứ chạy ngon lành 2 tháng đầu — vì bình thường không có
 
 Một ngày, **Broker 3 crash** (lỗi đĩa). Theo lý thuyết, cluster có RF=3, mất 1 broker không nên gây downtime. Nhưng thực tế:
 
-```
-Broker 3 là leader của khoảng 4.000 partition (1/6 tổng số)
-     │
-     ▼
-Controller phải elect lại leader cho 4.000 partition CÙNG LÚC
-     │
-     ▼
-Mỗi election = 1 write metadata vào ZooKeeper
-     │
-     ▼
-ZooKeeper trở thành bottleneck (4.000 write đồng thời)
-     │
-     ▼
-Controller "đứng" vài phút trong lúc metadata cập nhật
-     │
-     ▼
-Trong lúc đó: 4.000 partition không đọc ghi được
-Producer/Consumer timeout → cascading failure
-     │
-     ▼
-Tổng downtime: ~5 phút TOÀN CLUSTER
+```d2 title="Ví dụ recovery chậm trong cluster dùng ZooKeeper"
+direction: right
+fail: Broker 3 fail — leader khoảng 4000 partition
+elect: Controller elect lại 4000 leader
+writes: Ghi metadata vào ZooKeeper
+zk: ZooKeeper bottleneck
+pause: Controller chờ metadata cập nhật
+unavailable: 4000 partition tạm không đọc / ghi
+timeout: Producer / consumer timeout — cascading failure
+fail -> elect -> writes -> zk -> pause -> unavailable -> timeout
+note: "Kịch bản minh họa legacy ZooKeeper\nDowntime ví dụ ~5 phút, không phải cam kết của Kafka"
 ```
 
 ### Phân tích: tại sao chỉ mất 1 broker mà sập cả cluster?
@@ -440,22 +425,29 @@ Nếu cluster chỉ có 1.000 partition tổng, Broker 3 chứa ~170 partition �
 
 ### Cheat sheet
 
-```
-╔═══════════════════════════════════════════════════════════════╗
-║  Partition = đơn vị song song, NHƯNG cũng = đơn vị chi phí    ║
-║  ───────────────────────────────────────────────────────────  ║
-║  Thêm partition GIÚP khi:                                     ║
-║   • số consumer < số partition (còn headroom scale)           ║
-║  Thêm partition HẠI khi:                                      ║
-║   • đã đủ consumer • metadata phình • latency tăng            ║
-║   • không giảm được sau khi tạo                               ║
-║  ───────────────────────────────────────────────────────────  ║
-║  Công thức:                                                   ║
-║   partition = ceil(max_throughput / ~10MB/s) × 1.5–2 headroom ║
-║  Ngưỡng an toàn: < 4.000 partition/broker, < 20.000/cluster   ║
-║  Broker fail: recovery time ∝ số partition phải elect lại     ║
-╚═══════════════════════════════════════════════════════════════╝
-```
+<Callout type="info">
+
+Partition = đơn vị song song, NHƯNG cũng = đơn vị chi phí
+
+Thêm partition GIÚP khi:
+
+- số consumer &lt; số partition (còn headroom scale)
+
+Thêm partition HẠI khi:
+
+- đã đủ consumer • metadata phình • latency tăng
+
+- không giảm được sau khi tạo
+
+Công thức:
+
+partition = ceil(max_throughput / ~10MB/s) × 1.5–2 headroom
+
+Ngưỡng an toàn: &lt; 4.000 partition/broker, &lt; 20.000/cluster
+
+Broker fail: recovery time ∝ số partition phải elect lại
+
+</Callout>
 
 ### 3 nguyên tắc áp dụng ngay
 

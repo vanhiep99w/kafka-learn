@@ -57,28 +57,50 @@ public class OrderProducer {
 
 ### Pattern 2: Callback (Khuyến nghị — tốt nhất cho hầu hết cases)
 
-```java
-public void sendOrderWithCallback(OrderEvent event) {
-    CompletableFuture<SendResult<String, OrderEvent>> future =
-        kafkaTemplate.send("orders", event.getOrderId(), event);
+```code-walkthrough
+title: Gửi order và quan sát kết quả bất đồng bộ
+language: java
+snapshots:
+  - id: callback
+    title: OrderProducer.java
+    code: |-
+      public void sendOrderWithCallback(OrderEvent event) {
+          CompletableFuture<SendResult<String, OrderEvent>> future =
+              kafkaTemplate.send("orders", event.getOrderId(), event);
 
-    future.whenComplete((result, ex) -> {
-        if (ex == null) {
-            // ✅ Thành công
-            RecordMetadata metadata = result.getRecordMetadata();
-            log.info("Message gửi thành công: topic={}, partition={}, offset={}",
-                metadata.topic(),
-                metadata.partition(),
-                metadata.offset()
-            );
-        } else {
-            // ❌ Thất bại — log, alert, retry...
-            log.error("Không thể gửi message cho orderId={}: {}",
-                event.getOrderId(), ex.getMessage());
-            // Tùy yêu cầu: throw, retry, lưu vào outbox...
-        }
-    });
-}
+          future.whenComplete((result, ex) -> {
+              if (ex == null) {
+                  // ✅ Thành công
+                  RecordMetadata metadata = result.getRecordMetadata();
+                  log.info("Message gửi thành công: topic={}, partition={}, offset={}",
+                      metadata.topic(),
+                      metadata.partition(),
+                      metadata.offset()
+                  );
+              } else {
+                  // ❌ Thất bại — log, alert, retry...
+                  log.error("Không thể gửi message cho orderId={}: {}",
+                      event.getOrderId(), ex.getMessage());
+                  // Tùy yêu cầu: throw, retry, lưu vào outbox...
+              }
+          });
+      }
+steps:
+  - id: send
+    snapshot: callback
+    title: Gửi với orderId làm key
+    description: send() trả về CompletableFuture; việc hàm trả về chưa có nghĩa broker đã xác nhận ghi message.
+    ranges: [[2, 3]]
+  - id: success
+    snapshot: callback
+    title: Đọc metadata khi thành công
+    description: Nhánh ex == null đọc topic, partition và offset từ SendResult để log hoặc đo lường.
+    ranges: [[6, 13]]
+  - id: failure
+    snapshot: callback
+    title: Không bỏ qua lỗi gửi
+    description: Nhánh lỗi cần log và áp dụng chính sách retry hoặc outbox phù hợp. Throw trong callback không tự biến lời gọi sendOrderWithCallback thành synchronous failure.
+    ranges: [[14, 19]]
 ```
 
 Hoặc tách thành method riêng rõ ràng hơn:

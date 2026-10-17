@@ -285,31 +285,45 @@ Ví dụ:
 
 ### Decision Flowchart cho Debugging
 
-```mermaid
-flowchart TD
-    A["Production Issue"] --> B{Loại vấn đề?}
-
-    B -->|"Consumer lag tăng"| C{Lag đều hay không đều?}
-    C -->|"Đều mọi partitions"| D["Processing chậm\n→ Scale consumers"]
-    C -->|"Chỉ 1-2 partitions"| E["Hot partition\n→ Key salting"]
-
-    B -->|"Messages bị mất"| F{"Acks setting?"}
-    F -->|"acks=0"| G["Đổi sang acks=all"]
-    F -->|"acks=all"| H["Kiểm tra replication\n→ Broker có đủ ISR không"]
-
-    B -->|"Duplicate messages"| I{"Auto-commit?"}
-    I -->|"true"| J["Tắt auto-commit\n→ Manual acknowledge"]
-    I -->|"false"| K["Kiểm tra idempotent processing"]
-
-    B -->|"Consumer crash liên tục"| L{"Error type?"}
-    L -->|"SerializationException"| M["Fix deserializer\n→ Hoặc dùng DLT"]
-    L -->|"Processing error"| N["Fix bug\n→ Hoặc dùng retry topics"]
-    L -->|"Timeout"| O["Tăng max.poll.interval.ms\n→ Giảm max.poll.records"]
-
-    B -->|"Rebalance liên tục"| P{"Nguyên nhân?"}
-    P -->|"Consumer crash"| Q["Fix crash cause"]
-    P -->|"Network issue"| R["Kiểm tra network\n→ Tăng session.timeout.ms"]
-    P -->|"Processing quá lâu"| S["Giảm max.poll.records\n→ Tăng max.poll.interval.ms"]
+```d2 title="Decision Flowchart cho Debugging"
+direction: down
+A: "Production Issue"
+B: "Loại vấn đề?" { shape: diamond }
+C: "Lag đều hay không đều?" { shape: diamond }
+D: "Processing chậm\n→ Scale consumers"
+E: "Hot partition\n→ Key salting"
+F: "Acks setting?" { shape: diamond }
+G: "Đổi sang acks=all"
+H: "Kiểm tra replication\n→ Broker có đủ ISR không"
+I: "Auto-commit?" { shape: diamond }
+J: "Tắt auto-commit\n→ Manual acknowledge"
+K: "Kiểm tra idempotent processing"
+L: "Error type?" { shape: diamond }
+M: "Fix deserializer\n→ Hoặc dùng DLT"
+N: "Fix bug\n→ Hoặc dùng retry topics"
+O: "Tăng max.poll.interval.ms\n→ Giảm max.poll.records"
+P: "Nguyên nhân?" { shape: diamond }
+Q: "Fix crash cause"
+R: "Kiểm tra network\n→ Tăng session.timeout.ms"
+S: "Giảm max.poll.records\n→ Tăng max.poll.interval.ms"
+A -> B
+B -> C: "Consumer lag tăng"
+C -> D: "Đều mọi partitions"
+C -> E: "Chỉ 1-2 partitions"
+B -> F: "Messages bị mất"
+F -> G: "acks=0"
+F -> H: "acks=all"
+B -> I: "Duplicate messages"
+I -> J: "true"
+I -> K: "false"
+B -> L: "Consumer crash liên tục"
+L -> M: "SerializationException"
+L -> N: "Processing error"
+L -> O: "Timeout"
+B -> P: "Rebalance liên tục"
+P -> Q: "Consumer crash"
+P -> R: "Network issue"
+P -> S: "Processing quá lâu"
 ```
 
 ---

@@ -28,13 +28,9 @@ description: "Hiểu sâu về Topics, Partitions, Segments trong Kafka — nề
 - Topic được **chia thành partitions** để scale
 - Producer ghi vào topic, Consumer đọc từ topic
 
-```
-Topic: "order-events"
-┌─────────────────────────────────────┐
-│  Partition 0: [msg0][msg1][msg2]... │
-│  Partition 1: [msg0][msg1][msg2]... │
-│  Partition 2: [msg0][msg1][msg2]... │
-└─────────────────────────────────────┘
+```d2 title="Topic gồm nhiều partition"
+direction: down
+topic: "order-events" {p0: "Partition 0\nmsg0, msg1, msg2…"; p1: "Partition 1\nmsg0, msg1, msg2…"; p2: "Partition 2\nmsg0, msg1, msg2…"}
 ```
 
 ---
@@ -47,12 +43,14 @@ Partition là đơn vị **parallel** của Kafka. Mỗi partition là một **o
 
 Một topic với 1 partition = single-threaded = bottleneck. Nhiều partitions = parallel processing:
 
-```
-Topic: "orders" với 3 partitions
-
-Producer A ──▶ Partition 0 ──▶ Consumer 1
-Producer B ──▶ Partition 1 ──▶ Consumer 2
-Producer C ──▶ Partition 2 ──▶ Consumer 3
+```d2 title="Song song hóa qua partition"
+direction: right
+a: Producer A; b: Producer B; c: Producer C
+p0: Partition 0; p1: Partition 1; p2: Partition 2
+c1: Consumer 1; c2: Consumer 2; c3: Consumer 3
+a -> p0 -> c1
+b -> p1 -> c2
+c -> p2 -> c3
 ```
 
 ### Partition Key
@@ -69,10 +67,11 @@ Producer quyết định message vào partition nào bằng **partition key**:
 
 ### Kafka chỉ đảm bảo ordering trong partition
 
-```
-Partition 0: [order#1-created] [order#1-paid] [order#1-shipped]  ✓ Ordered
-Partition 1: [order#2-created] [order#2-cancelled]               ✓ Ordered
-Cross-partition: KHÔNG đảm bảo thứ tự                            ✗
+```d2 title="Ordering chỉ được đảm bảo trong từng partition"
+direction: right
+p0: "Partition 0 — ordered" {a: order 1 created; b: order 1 paid; c: order 1 shipped; a -> b -> c}
+p1: "Partition 1 — ordered" {a: order 2 created; b: order 2 cancelled; a -> b}
+note: "Không có ordering giữa hai partition"
 ```
 
 ---
@@ -81,15 +80,13 @@ Cross-partition: KHÔNG đảm bảo thứ tự                            ✗
 
 Mỗi message (còn gọi là **record**) gồm:
 
-```
-┌─────────────────────────────────────┐
-│ Offset:    42                       │
-│ Timestamp: 2024-01-15T10:30:00Z     │
-│ Key:       "user-123" (optional)    │
-│ Value:     {"action":"login",...}   │
-│ Headers:   [trace-id: abc123]       │
-└─────────────────────────────────────┘
-```
+| Trường | Giá trị ví dụ |
+| --- | --- |
+| Offset | `42` |
+| Timestamp | `2024-01-15T10:30:00Z` |
+| Key | `"user-123"` (optional) |
+| Value | `{"action":"login",...}` |
+| Headers | `trace-id: abc123` |
 
 | Field | Mô tả |
 |-------|-------|
@@ -105,11 +102,13 @@ Mỗi message (còn gọi là **record**) gồm:
 
 Mỗi partition có **1 Leader** và **N-1 Followers** (replicas):
 
-```
-Topic: "orders", Partition 0, Replication Factor: 3
-
-Broker 1: [LEADER P0] ──replicates──▶ Broker 2: [FOLLOWER P0]
-                    └──replicates──▶ Broker 3: [FOLLOWER P0]
+```d2 title="Replication factor 3"
+direction: right
+b1: "Broker 1 — Leader P0"
+b2: "Broker 2 — Follower P0"
+b3: "Broker 3 — Follower P0"
+b1 -> b2: Replicate
+b1 -> b3: Replicate
 ```
 
 - Producer/Consumer **chỉ làm việc với Leader**

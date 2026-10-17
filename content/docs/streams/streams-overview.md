@@ -22,33 +22,17 @@ description: "Kafka Streams là gì, khi nào dùng, so sánh với Kafka Consum
 
 **Kafka Streams** là một **client library** (không phải cluster riêng) cho phép bạn xây dựng ứng dụng xử lý dữ liệu streaming trực tiếp trong JVM application của mình.
 
-```
-┌─────────────────────────────────────────────────────────────────────────────────┐
-│                    KAFKA STREAMS ARCHITECTURE                                   │
-├─────────────────────────────────────────────────────────────────────────────────┤
-│                                                                                 │
-│   Traditional Kafka Consumer:                                                   │
-│   ┌────────────┐     poll()     ┌─────────────┐    write    ┌────────────────┐  │
-│   │   Kafka    │ ────────────▶  │  Your App   │ ─────────▶  │  Database/API  │  │
-│   │  (source)  │                │  (process)  │             │  (sink)        │  │
-│   └────────────┘                └─────────────┘             └────────────────┘  │
-│                                                                                 │
-│   Kafka Streams:                                                                │
-│   ┌────────────┐   read from   ┌──────────────────────────┐  write to           │
-│   │  Input     │ ────────────▶ │     Kafka Streams App    │ ─────────▶ Output   │
-│   │  Topic(s)  │               │  ┌─────────────────────┐ │  Topic(s)           │
-│   └────────────┘               │  │  Processing Topology│ │                     │
-│                                │  │  filter → map →     │ │                     │
-│                                │  │  groupBy → aggregate│ │                     │
-│                                │  └─────────────────────┘ │                     │
-│                                │  Built-in:               │                     │
-│                                │  • State Stores (RocksDB)│                     │
-│                                │  • Windowing             │                     │
-│                                │  • Joins                 │                     │
-│                                └──────────────────────────┘                     │
-│                                                                                 │
-│   Key Difference: Kafka → Kafka. Input and output are BOTH Kafka topics         │
-└─────────────────────────────────────────────────────────────────────────────────┘
+```d2 title="Consumer application và Kafka Streams"
+direction: right
+traditional: "Kafka consumer truyền thống" {source: Kafka source; app: Your App — process; sink: Database / API; source -> app: poll(); app -> sink: Write}
+streams: "Kafka Streams" {
+  input: Input topics
+  app: Kafka Streams App {topology: "filter → map → groupBy → aggregate"; state: "Built-in: RocksDB state stores\nWindowing / Joins"}
+  output: Output topics
+  input -> app: Read
+  app -> output: Write
+}
+note: "Kafka Streams: input và output đều là Kafka topics"
 ```
 
 **3 đặc điểm cốt lõi:**
@@ -98,42 +82,48 @@ description: "Kafka Streams là gì, khi nào dùng, so sánh với Kafka Consum
 
 **KStream** đại diện cho **stream of events** — mỗi record là một sự kiện độc lập, giống append-only log.
 
-```
-KStream<String, OrderEvent>:
-
-Time: ────────────────────────────────────────────────────────→
-      [order-1: $100] [order-2: $50] [order-1: CANCEL] [order-3: $200]
-
-Mỗi record là một EVENT — không overwrite record trước đó
-Phù hợp: Transaction logs, click events, sensor readings
+```d2 title="KStream giữ từng event độc lập"
+direction: right
+stream: "KStream<String, OrderEvent>" {
+  a: "order-1: \$100"; b: "order-2: \$50"; c: "order-1: CANCEL"; d: "order-3: \$200"
+  a -> b -> c -> d: Event time
+}
+note: "Record mới không overwrite event cũ\nDùng cho transaction logs, click events, sensor readings"
 ```
 
 ### KTable — Changelog Stream (Materialized View)
 
 **KTable** đại diện cho **current state** — chỉ giữ giá trị mới nhất per key (như database table).
 
-```
-KTable<String, UserProfile>:
-
-Key "user-1":  ──[profile-v1]──[profile-v2]──[profile-v3]────→
-                                              ↑ Only this kept!
-
-Phù hợp: User profiles, account balances, configuration
+```d2 title="KTable biểu diễn giá trị mới nhất theo key"
+direction: right
+a: "user-1: profile-v1"
+b: "user-1: profile-v2"
+c: "user-1: profile-v3\nTrạng thái hiện tại"
+a -> b -> c: Update cùng key
+note: "Dùng cho user profile, account balance, configuration"
 ```
 
 ### KStream vs KTable: Semantic khác nhau
 
-```mermaid
-graph TB
-    subgraph "KStream (All events matter)"
-        S1["user-1: $10"] --> S2["user-1: $20"] --> S3["user-1: $5"]
-        Note1["Total spending: $35\n3 purchases"]
-    end
-
-    subgraph "KTable (Only latest matters)"
-        T1["user-1: balance=$100"] --> T2["user-1: balance=$80"] --> T3["user-1: balance=$90"]
-        Note2["Current balance: $90\n(Previous values discarded)"]
-    end
+```d2 title="KStream vs KTable: Semantic khác nhau"
+direction: down
+g1: "KStream (All events matter)" {
+  S1: "user-1: \$10"
+  S2: "user-1: \$20"
+  S3: "user-1: \$5"
+  Note1: "Total spending: \$35\n3 purchases"
+}
+g2: "KTable (Only latest matters)" {
+  T1: "user-1: balance=\$100"
+  T2: "user-1: balance=\$80"
+  T3: "user-1: balance=\$90"
+  Note2: "Current balance: \$90\n(Previous values discarded)"
+}
+g1.S1 -> g1.S2
+g1.S2 -> g1.S3
+g2.T1 -> g2.T2
+g2.T2 -> g2.T3
 ```
 
 ### GlobalKTable — Replicated State
@@ -153,15 +143,21 @@ GlobalKTable<String, Product> globalProducts = builder.globalTable("products");
 
 Mỗi Kafka Streams app định nghĩa một **topology** — directed acyclic graph (DAG) của operations:
 
-```mermaid
-graph LR
-    subgraph "Example Topology: Order Revenue Calculator"
-        A["Source\norders topic"] --> B["filter\n(only COMPLETED)"]
-        B --> C["map\n(extract revenue)"]
-        C --> D["groupByKey\n(by customerId)"]
-        D --> E["aggregate\n(sum revenue)"]
-        E --> F["Sink\ncustomer-revenue topic"]
-    end
+```d2 title="Stream Processing Topology"
+direction: right
+g1: "Example Topology: Order Revenue Calculator" {
+  A: "Source\norders topic"
+  B: "filter\n(only COMPLETED)"
+  C: "map\n(extract revenue)"
+  D: "groupByKey\n(by customerId)"
+  E: "aggregate\n(sum revenue)"
+  F: "Sink\ncustomer-revenue topic"
+}
+g1.A -> g1.B
+g1.B -> g1.C
+g1.C -> g1.D
+g1.D -> g1.E
+g1.E -> g1.F
 ```
 
 **Loại nodes trong topology:**
@@ -179,59 +175,45 @@ graph LR
 
 Kafka Streams tự động quản lý **State Stores** (dùng RocksDB locally + changelog topic trên Kafka):
 
-```
-┌─────────────────────────────────────────────────────────────────────────────────┐
-│                    STATE STORE ARCHITECTURE                                     │
-├─────────────────────────────────────────────────────────────────────────────────┤
-│                                                                                 │
-│  Kafka Streams Instance:                                                        │
-│  ┌───────────────────────────────────────────────────────┐                      │
-│  │  Processing Logic                                     │                      │
-│  │  ┌────────────────────────────────────────────────┐   │                      │
-│  │  │  groupBy("customerId").count()                 │   │                      │
-│  │  └───────────────────┬────────────────────────────┘   │                      │
-│  │                      │ read/write                     │                      │
-│  │  ┌───────────────────▼────────────────────────────┐   │                      │
-│  │  │  Local State Store (RocksDB)                   │   │                      │
-│  │  │  customer-1 → 42 orders                        │   │                      │
-│  │  │  customer-2 → 7 orders                         │   │                      │
-│  │  │  customer-3 → 108 orders                       │   │                      │
-│  │  └───────────────────┬────────────────────────────┘   │                      │
-│  └──────────────────────┼────────────────────────────────┘                      │
-│                         │ backed up to                                          │
-│  ┌──────────────────────▼─────────────────────────────┐                         │
-│  │  Kafka Changelog Topic                             │                         │
-│  │  (stores-order-count-changelog)                    │                         │
-│  │  Dùng để restore state khi instance restart!       │                         │
-│  └────────────────────────────────────────────────────┘                         │
-│                                                                                 │
-│  Benefits:                                                                      │
-│  ✅ Sub-millisecond reads (local RocksDB)                                       │
-│  ✅ Durable (backed by Kafka)                                                   │
-│  ✅ Auto-restored after crash                                                   │
-└─────────────────────────────────────────────────────────────────────────────────┘
+```d2 title="Local state store được khôi phục từ changelog"
+direction: down
+instance: Kafka Streams Instance {
+  logic: "Processing logic\ngroupBy(customerId).count()"
+  store: "Local RocksDB state store\ncustomer-1 → 42 orders\ncustomer-2 → 7 orders\ncustomer-3 → 108 orders" {shape: cylinder}
+  logic -> store: Read / write
+}
+changelog: "Kafka changelog topic\nstores-order-count-changelog"
+instance.store -> changelog: Backup state
+changelog -> instance.store: Restore khi restart
+note: "Local reads sub-millisecond trong ví dụ\nDurable nhờ Kafka; auto-restore sau crash"
 ```
 
 ---
 
 ## Khi nào dùng Kafka Streams
 
-```mermaid
-flowchart TD
-    A[Cần xử lý Kafka messages?] --> B{Output đến đâu?}
-
-    B -->|Database hoặc API| C["@KafkaListener\nSimpler, direct"]
-    B -->|Kafka topic khác| D{Cần stateful processing?}
-
-    D -->|Không - simple transform| E{Nhiều logic phức tạp?}
-    D -->|Có - aggregation, join, count| F["✅ Kafka Streams\nState Store"]
-
-    E -->|Không| G["@KafkaListener\n+ manual produce"]
-    E -->|Có - ETL pipeline| H["✅ Kafka Streams\nTopology DSL"]
-
-    F --> I{"Scale > 100K msg/s\nhoặc complex joins?"}
-    I -->|Có| J["Consider Flink\nfor higher scale"]
-    I -->|Không| F
+```d2 title="Khi nào dùng Kafka Streams"
+direction: down
+A: "Cần xử lý Kafka messages?"
+B: "Output đến đâu?" { shape: diamond }
+C: "@KafkaListener\nSimpler, direct"
+D: "Cần stateful processing?" { shape: diamond }
+E: "Nhiều logic phức tạp?" { shape: diamond }
+F: "✅ Kafka Streams\nState Store"
+G: "@KafkaListener\n+ manual produce"
+H: "✅ Kafka Streams\nTopology DSL"
+I: "Scale > 100K msg/s\nhoặc complex joins?" { shape: diamond }
+J: "Consider Flink\nfor higher scale"
+A -> B
+B -> C: "Database hoặc API"
+B -> D: "Kafka topic khác"
+D -> E: "Không - simple transform"
+D -> F: "Có - aggregation, join, count"
+E -> G: "Không"
+E -> H: "Có - ETL pipeline"
+F -> I
+I -> J: "Có"
+I -> F: "Không"
 ```
 
 **Use cases phù hợp nhất:**

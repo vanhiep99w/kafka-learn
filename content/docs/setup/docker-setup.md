@@ -73,14 +73,24 @@ services:
 
 Khởi động:
 
-```bash
-docker-compose up -d
-
-# Kiểm tra status
-docker-compose ps
-
-# Xem logs
-docker-compose logs -f kafka
+```terminal-session
+title: Khởi động và kiểm tra Kafka local
+context:
+  kind: local
+  label: Docker Compose
+steps:
+  - id: start
+    title: Khởi động services
+    command: docker-compose up -d
+    expected: Kafka và Kafka UI được khởi động từ docker-compose.yml trong thư mục hiện tại.
+  - id: status
+    title: Kiểm tra trạng thái
+    command: docker-compose ps
+    expected: Kiểm tra các service đang chạy; nếu service thoát, đọc logs trước khi tiếp tục.
+  - id: logs
+    title: Theo dõi broker logs
+    command: docker-compose logs -f kafka
+    expected: Theo dõi log cho tới khi broker sẵn sàng. Nhấn Ctrl+C để dừng theo dõi, không dừng broker.
 ```
 
 ---
@@ -150,12 +160,17 @@ Sau khi khởi động, truy cập **http://localhost:8080** để dùng Kafka U
 
 ## Verify cài đặt
 
-```bash
-# Vào container kafka
-docker exec -it kafka bash
+Nếu cần shell trong container, dùng `docker exec -it kafka bash`. Để kiểm tra từ host mà không cần vào shell:
 
-# Hoặc dùng kafka-topics.sh từ ngoài container
-docker exec kafka kafka-topics --list --bootstrap-server localhost:9092
+```terminal-session
+title: Liệt kê topic từ host
+context:
+  kind: local
+  label: Docker host
+steps:
+  - id: list-topics
+    command: docker exec kafka kafka-topics --list --bootstrap-server localhost:9092
+    expected: Danh sách topic của cluster; cluster mới có thể chưa có user topic. Không có stdout không tự chứng minh broker khỏe — kiểm tra cả lỗi và exit code thực tế.
 ```
 
 Nếu không có lỗi và trả về empty list (hoặc `__consumer_offsets`), Kafka đã chạy bình thường.

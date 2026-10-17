@@ -51,13 +51,12 @@ Câu hỏi này kiểm tra ba năng lực:
 
 Kafka đảm bảo thứ tự trong phạm vi **một partition**. Với một consumer group, một partition tại một thời điểm được gán cho một consumer. Nếu mọi event của `merchant-42` đều vào partition P3:
 
-```text
-Producer                                      Consumer Group
-
-merchant-42 events                            one ordered lane
-E100 ─┐                                       ┌──────────────┐
-E101 ─┼──▶ Partition P3: E100, E101, E102 ──▶│ Consumer C3  │
-E102 ─┘                                       └──────────────┘
+```d2 title="Strict ordering: một ordered lane"
+direction: right
+merchant: "merchant-42 events" {a: E100; b: E101; c: E102; a -> b -> c: Thứ tự}
+p: "Partition P3\nE100, E101, E102"
+c: Consumer C3 — một ordered lane
+merchant -> p -> c
 ```
 
 Nếu `E101` cần state do `E100` tạo ra, ta không thể xử lý chúng độc lập:
@@ -210,20 +209,31 @@ Metrics cần đặt cạnh nhau:
 
 ## 5. Incident playbook trong 15 phút đầu
 
-```mermaid
-flowchart TD
-    A["Phát hiện hot partition"] --> B["Đóng băng thay đổi có thể phá ordering"]
-    B --> C["Đo λ, μ, lag và broker health"]
-    C --> D{"λ > μ?"}
-    D -->|"Có"| E["Rate limit / backpressure hot tenant"]
-    D -->|"Không"| F["Kiểm tra burst đã kết thúc, tính catch-up time"]
-    E --> G["Tăng μ bằng ordered batching và scale dọc"]
-    F --> G
-    G --> H{"Leader broker bão hòa?"}
-    H -->|"Có"| I["Chuyển leader sang ISR khỏe / cô lập workload"]
-    H -->|"Không"| J["Giữ placement, tập trung consumer/downstream"]
-    I --> K["Kiểm tra retention, disk và ETA catch up"]
-    J --> K
+```d2 title="5. Incident playbook trong 15 phút đầu"
+direction: down
+A: "Phát hiện hot partition"
+B: "Đóng băng thay đổi có thể phá ordering"
+C: "Đo λ, μ, lag và broker health"
+D: "λ > μ?" { shape: diamond }
+E: "Rate limit / backpressure hot tenant"
+F: "Kiểm tra burst đã kết thúc, tính catch-up time"
+G: "Tăng μ bằng ordered batching và scale dọc"
+H: "Leader broker bão hòa?" { shape: diamond }
+I: "Chuyển leader sang ISR khỏe / cô lập workload"
+J: "Giữ placement, tập trung consumer/downstream"
+K: "Kiểm tra retention, disk và ETA catch up"
+A -> B
+B -> C
+C -> D
+D -> E: "Có"
+D -> F: "Không"
+E -> G
+F -> G
+G -> H
+H -> I: "Có"
+H -> J: "Không"
+I -> K
+J -> K
 ```
 
 ### Phút 0–3: bảo vệ correctness
@@ -268,10 +278,16 @@ Với strict ordering, giảm `λ` thường là biện pháp tức thời hiệ
 
 Kafka quota hiểu `user` và `client.id`, nhưng không hiểu `merchantId` nằm trong message. Vì vậy, nếu nhiều tenant đi qua cùng producer, application gateway là nơi throttle chính xác nhất.
 
-```text
-Client ──▶ API Gateway ──▶ per-merchant limiter ──▶ Kafka Producer
-                │
-                └── 429 + Retry-After khi merchant vượt quota
+```d2 title="Rate limit theo merchant trước Kafka"
+direction: right
+client: Client
+gateway: API Gateway
+limiter: Per-merchant limiter {shape: diamond}
+producer: Kafka Producer
+rejected: "429 + Retry-After\nKhi merchant vượt quota"
+client -> gateway -> limiter
+limiter -> producer: Trong quota
+limiter -> rejected: Vượt quota
 ```
 
 Pseudo-code:
@@ -356,16 +372,23 @@ Scale dọc chỉ có tác dụng khi consumer thực sự bị giới hạn b�
 
 Không tốt:
 
-```text
-E100 → INSERT + COMMIT
-E101 → INSERT + COMMIT
-E102 → INSERT + COMMIT
+```d2 title="Commit từng event"
+direction: right
+a: "E100\nINSERT + COMMIT"
+b: "E101\nINSERT + COMMIT"
+c: "E102\nINSERT + COMMIT"
+a -> b -> c
 ```
 
 Tốt hơn nếu nghiệp vụ cho phép transaction theo batch:
 
-```text
-[E100, E101, E102] → ordered batch write → COMMIT → commit Kafka offset
+```d2 title="Ordered batching trước commit Kafka offset"
+direction: right
+events: "E100, E101, E102"
+write: Ordered batch write
+commit: DB COMMIT
+offset: Commit Kafka offset
+events -> write -> commit -> offset
 ```
 
 Pseudo-code:
@@ -410,10 +433,17 @@ Ordering vẫn có thể được bảo toàn nếu request và response có seq
 
 Có một ngoại lệ cho phép tận dụng song song mà vẫn giữ **thứ tự đầu ra**:
 
-```text
-E100 ── validate/enrich ───── done #2 ─┐
-E101 ── validate/enrich ─ done #1 ─────┼── resequencer ──▶ apply E100, E101, E102
-E102 ── validate/enrich ─────── done #3 ┘
+```d2 title="Parallel enrichment, apply theo đúng sequence"
+direction: right
+e100: "E100\nValidate / enrich — done #2"
+e101: "E101\nValidate / enrich — done #1"
+e102: "E102\nValidate / enrich — done #3"
+r: Resequencer
+apply: Apply E100, E101, E102
+e100 -> r
+e101 -> r
+e102 -> r
+r -> apply: Khôi phục thứ tự
 ```
 
 Áp dụng được khi phần tốn thời gian là độc lập, ví dụ:
@@ -462,15 +492,11 @@ Trade-off:
 
 Mọi produce request cho partition đi qua leader. Consumer thông thường cũng fetch từ leader. Nếu leader của hot partition nằm trên broker đang chứa nhiều leader nóng khác, broker đó có thể bão hòa dù toàn cluster còn tài nguyên.
 
-```text
-Trước:
-Broker 1: P3 leader HOT + P7 leader HOT + workload khác
-Broker 2: P3 follower, còn headroom
-Broker 3: P3 follower, còn headroom
-
-Sau:
-Broker 1: P3 follower
-Broker 2: P3 leader HOT
+```d2 title="Chuyển leader sang replica có headroom"
+direction: right
+before: "Trước" {b1: "Broker 1\nP3 leader HOT + P7 leader HOT\nWorkload khác"; b2: "Broker 2\nP3 follower — có headroom"; b3: "Broker 3\nP3 follower — có headroom"}
+after: "Sau" {b1: Broker 1 — P3 follower; b2: Broker 2 — P3 leader HOT; b3: Broker 3 — P3 follower}
+before -> after: Chuyển leader P3
 ```
 
 ### 8.1 Khi nào chuyển leader có ích?
@@ -526,15 +552,16 @@ Vì vậy, nếu mục tiêu chỉ là giảm leader load và broker đích đã
 
 Nếu không được phép trả lỗi cho client, ingress có thể nhận request vào một buffer bền vững rồi phát dần theo rate an toàn.
 
-```text
-Client
-  │
-  ▼
-Ingress API
-  │
-  ├──▶ Durable Outbox / Queue ──▶ rate-controlled publisher ──▶ Kafka P3
-  │
-  └──▶ Trả accepted + requestId
+```d2 title="Durable buffer trước rate-controlled publisher"
+direction: right
+client: Client
+api: Ingress API
+outbox: Durable Outbox / Queue
+publisher: Rate-controlled publisher
+kafka: Kafka P3
+accepted: Trả accepted + requestId
+client -> api -> outbox -> publisher -> kafka
+api -> accepted
 ```
 
 Các lựa chọn:
@@ -642,12 +669,12 @@ Dùng controlled recovery rate và quan sát `μ − λ` để chọn ETA hợp 
 
 Partition thường được tính từ key và số partition. Khi số partition thay đổi, mapping của key có thể đổi. Record cũ vẫn nằm ở partition cũ, record mới có thể sang partition khác:
 
-```text
-Trước khi tăng partition:
-merchant-42 → P3 → E100, E101
-
-Sau khi tăng partition:
-merchant-42 → P7 → E102, E103
+```d2 title="Đổi partition count có thể phá ordering theo key"
+direction: right
+before: "Trước tăng partition" {key: merchant-42; p: "P3\nE100, E101"; key -> p}
+after: "Sau tăng partition" {key: merchant-42; p: "P7\nE102, E103"; key -> p}
+before -> after
+note: "P3 và P7 được consume độc lập\nKhông còn một lane duy nhất cho merchant-42"
 ```
 
 P3 và P7 được consume độc lập, nên E102 có thể được xử lý trước E101. Tăng partition không phải thao tác vô hại với keyed ordering.
@@ -891,27 +918,37 @@ Team giữ throttle cho đến khi Kafka lag và outbox age về ngưỡng an to
 
 ### Cheat sheet
 
-```text
-╔══════════════════════════════════════════════════════════════════╗
-║  STRICT ORDERING = MỘT ORDERED LANE                              ║
-║  ──────────────────────────────────────────────────────────────  ║
-║  λ = arrival rate, μ = service rate                              ║
-║  λ > μ  → lag bắt buộc tăng                                      ║
-║  μ > λ  → lag có thể catch up                                    ║
-║  Catch-up ETA = lag / (μ − λ)                                    ║
-║  ──────────────────────────────────────────────────────────────  ║
-║  INCIDENT:                                                       ║
-║   1. Không đổi key/salt/tăng partition mù quáng                  ║
-║   2. Đo λ, μ, lag per partition, leader, ISR, downstream         ║
-║   3. Rate limit/backpressure hoặc durable buffer                 ║
-║   4. Scale dọc + ordered batching + tối ưu downstream            ║
-║   5. Chuyển leader sang ISR khỏe để cô lập blast radius          ║
-║   6. Kiểm tra retention, disk và catch-up ETA                    ║
-║  ──────────────────────────────────────────────────────────────  ║
-║  DÀI HẠN: quota, admission control, dedicated workload,          ║
-║  sequence/idempotency, xác định đúng ordering scope              ║
-╚══════════════════════════════════════════════════════════════════╝
-```
+<Callout type="info">
+
+STRICT ORDERING = MỘT ORDERED LANE
+
+λ = arrival rate, μ = service rate
+
+λ &gt; μ  → lag bắt buộc tăng
+
+μ &gt; λ  → lag có thể catch up
+
+Catch-up ETA = lag / (μ − λ)
+
+INCIDENT:
+
+1. Không đổi key/salt/tăng partition mù quáng
+
+2. Đo λ, μ, lag per partition, leader, ISR, downstream
+
+3. Rate limit/backpressure hoặc durable buffer
+
+4. Scale dọc + ordered batching + tối ưu downstream
+
+5. Chuyển leader sang ISR khỏe để cô lập blast radius
+
+6. Kiểm tra retention, disk và catch-up ETA
+
+DÀI HẠN: quota, admission control, dedicated workload,
+
+sequence/idempotency, xác định đúng ordering scope
+
+</Callout>
 
 ### Câu trả lời mẫu 2 phút
 

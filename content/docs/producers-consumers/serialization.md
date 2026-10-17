@@ -23,20 +23,13 @@ description: "So sánh các format serialization trong Kafka: String, JSON, Avro
 
 Kafka truyền dữ liệu dưới dạng **bytes**. Java objects phải được chuyển đổi sang bytes trước khi gửi (serialize), và ngược lại khi nhận (deserialize).
 
-```
-┌─────────────────────────────────────────────────────────────────────┐
-│                    SERIALIZATION FLOW                               │
-├─────────────────────────────────────────────────────────────────────┤
-│                                                                     │
-│  Producer:                                                          │
-│  OrderEvent ──[Serializer]──▶ bytes ──▶ Kafka Topic                 │
-│                                                                     │
-│  Consumer:                                                          │
-│  Kafka Topic ──▶ bytes ──[Deserializer]──▶ OrderEvent               │
-│                                                                     │
-│  Key cũng cần được serialize/deserialize riêng!                     │
-│  String "order-123" ──[StringSerializer]──▶ bytes                   │
-└─────────────────────────────────────────────────────────────────────┘
+```d2 title="Serialize và deserialize key / value"
+direction: right
+producer: Producer {event: OrderEvent; ser: Serializer; bytes: bytes; event -> ser -> bytes}
+kafka: Kafka topic
+consumer: Consumer {bytes: bytes; deser: Deserializer; event: OrderEvent; bytes -> deser -> event}
+producer.bytes -> kafka -> consumer.bytes
+key: "Key serialize riêng" {text: String order-123; ser: StringSerializer; bytes: bytes; text -> ser -> bytes}
 ```
 
 ---
@@ -389,23 +382,31 @@ public ConsumerFactory<String, OrderEvent> orderConsumerFactory() {
 
 ## Chọn Format nào?
 
-```mermaid
-flowchart TD
-    A[Chọn Serialization Format] --> B{Yêu cầu về performance?}
-
-    B -->|Ultra-high: 100K+ msg/s| C[Protobuf]
-    B -->|Normal| D{Cần Schema Registry?}
-
-    D -->|Có — nhiều services, schema evolution| E[Avro]
-    D -->|Không| F{Debug và simplicity quan trọng?}
-
-    F -->|Có| G[JSON]
-    F -->|Messages là plain text| H[String]
-
-    G --> I["✅ Dùng được cho 80% use cases\nDễ debug, không cần infra phụ"]
-    E --> J["✅ Best practice cho microservices\nCần Confluent Schema Registry"]
-    C --> K["✅ Maximum performance\n.proto file, compile step"]
-    H --> L["✅ Đơn giản nhất\nLogs, commands, simple events"]
+```d2 title="Chọn Format nào?"
+direction: down
+A: "Chọn Serialization Format"
+B: "Yêu cầu về performance?" { shape: diamond }
+C: "Protobuf"
+D: "Cần Schema Registry?" { shape: diamond }
+E: "Avro"
+F: "Debug và simplicity quan trọng?" { shape: diamond }
+G: "JSON"
+H: "String"
+I: "✅ Dùng được cho 80% use cases\nDễ debug, không cần infra phụ"
+J: "✅ Best practice cho microservices\nCần Confluent Schema Registry"
+K: "✅ Maximum performance\n.proto file, compile step"
+L: "✅ Đơn giản nhất\nLogs, commands, simple events"
+A -> B
+B -> C: "Ultra-high: 100K+ msg/s"
+B -> D: "Normal"
+D -> E: "Có — nhiều services, schema evolution"
+D -> F: "Không"
+F -> G: "Có"
+F -> H: "Messages là plain text"
+G -> I
+E -> J
+C -> K
+H -> L
 ```
 
 <Cards>

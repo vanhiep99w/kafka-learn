@@ -58,20 +58,19 @@ Kafka ở chế độ phổ biến nhất là **at-least-once**. Duplicate là c
 | Consumer group **rebalance** | Partition bị reassign giữa chừng → message được xử lý lại bởi consumer khác |
 | Reprocessing / replay | Reset offset để chạy lại, hoặc deploy lại service |
 
-```mermaid
-sequenceDiagram
-    participant K as Kafka
-    participant C as Consumer
-    participant DB as Database
-
-    C->>K: poll() → {orderId:123, action:"ship"}
-    C->>DB: UPDATE orders SET status='shipped' WHERE id=123
-    DB-->>C: OK
-    Note over C: 💥 Crash TRƯỚC khi commit offset!
-    Note over C: Restart — offset chưa commit
-    C->>K: poll() → CÙNG message {orderId:123}
-    C->>DB: Xử lý LẠI lần 2
-    Note over C,DB: Nếu không idempotent → double effect
+```d2 title="Vì sao Kafka bắt buộc phải quan tâm idempotency?"
+shape: sequence_diagram
+K: "Kafka"
+C: "Consumer"
+DB: "Database"
+C -> K: "poll() → {orderId:123, action:\"ship\"}"
+C -> DB: "UPDATE orders SET status='shipped' WHERE id=123"
+DB -> C: "OK" { style.stroke-dash: 4 }
+C.note1: "💥 Crash TRƯỚC khi commit offset!"
+C.note2: "Restart — offset chưa commit"
+C -> K: "poll() → CÙNG message {orderId:123}"
+C -> DB: "Xử lý LẠI lần 2"
+C.note3: "C / DB: Nếu không idempotent → double effect"
 ```
 
 ---
@@ -80,19 +79,25 @@ sequenceDiagram
 
 Đừng nhầm lẫn — đây là **hai tầng khác nhau**, giải quyết **hai vấn đề khác nhau**.
 
-```
-┌───────────────────────────────────────────────────────────────┐
-│ TẦNG 1: PRODUCER IDEMPOTENCY (Kafka lo hộ)                    │
-│   - enable.idempotence=true                                   │
-│   - Chống duplicate do PRODUCER RETRY (network-level)         │
-│   - Phạm vi: 1 producer session, trong 1 partition            │
-├───────────────────────────────────────────────────────────────┤
-│ TẦNG 2: CONSUMER / PROCESSING IDEMPOTENCY (BẠN tự lo)         │
-│   - Chống duplicate do CRASH, REBALANCE, REPLAY               │
-│   - Đây là nơi TOCTOU race condition xuất hiện                │
-│   - Phạm vi: business logic + database/API                    │
-└───────────────────────────────────────────────────────────────┘
-```
+<Callout type="info">
+
+TẦNG 1: PRODUCER IDEMPOTENCY (Kafka lo hộ)
+
+- enable.idempotence=true
+
+- Chống duplicate do PRODUCER RETRY (network-level)
+
+- Phạm vi: 1 producer session, trong 1 partition
+
+TẦNG 2: CONSUMER / PROCESSING IDEMPOTENCY (BẠN tự lo)
+
+- Chống duplicate do CRASH, REBALANCE, REPLAY
+
+- Đây là nơi TOCTOU race condition xuất hiện
+
+- Phạm vi: business logic + database/API
+
+</Callout>
 
 ### 2.1 Producer Idempotency (built-in)
 
@@ -216,15 +221,21 @@ WHERE id = :id AND version = :expectedVersion;   -- 0 row affected = đã bị x
 
 ### 4.1 Bản chất vấn đề
 
-```
-   THREAD A                          THREAD B
-   ────────                          ────────
-   CHECK: đã xử lý chưa? → CHƯA
-                                     CHECK: đã xử lý chưa? → CHƯA
-   USE:   charge tiền 💳
-                                     USE:   charge tiền 💳   ← DOUBLE!
-   ghi dấu processed
-                                     ghi dấu processed
+```d2 title="Check-then-act có race condition"
+shape: sequence_diagram
+a: Thread A
+b: Thread B
+db: Dedup store
+charge: Payment API
+a -> db: CHECK đã xử lý chưa?
+db -> a: Chưa
+b -> db: CHECK đã xử lý chưa?
+db -> b: Chưa
+a -> charge: USE — charge tiền
+b -> charge: USE — charge tiền lần hai
+charge.note: DOUBLE CHARGE
+a -> db: Ghi dấu processed
+b -> db: Ghi dấu processed
 ```
 
 Khoảng trống giữa **CHECK** (bước 1) và **USE** (bước 2) chính là **cửa sổ race (race window)**. Bất kỳ ai cũng có thể "chen" vào giữa.
@@ -237,21 +248,20 @@ Khoảng trống giữa **CHECK** (bước 1) và **USE** (bước 2) chính là
 
 ### 4.2 Vì sao pattern "check-then-act" ở Strategy 2 bị lỗi
 
-```mermaid
-sequenceDiagram
-    participant T1 as Consumer Thread 1
-    participant T2 as Consumer Thread 2
-    participant DB as processed_messages
-
-    Note over T1,T2: Cùng nhận Payment-99 (duplicate)
-    T1->>DB: SELECT exists(id='P99')?
-    DB-->>T1: false  (CHECK)
-    T2->>DB: SELECT exists(id='P99')?
-    DB-->>T2: false  (CHECK — vẫn chưa ai ghi!)
-    T1->>T1: charge $100  (USE)
-    T2->>T2: charge $100  (USE — DOUBLE CHARGE 💥)
-    T1->>DB: INSERT id='P99'
-    T2->>DB: INSERT id='P99'  → có thể lỗi, nhưng tiền đã charge rồi!
+```d2 title="4.2 Vì sao pattern 'check-then-act' ở Strategy 2 bị lỗi"
+shape: sequence_diagram
+T1: "Consumer Thread 1"
+T2: "Consumer Thread 2"
+DB: "processed_messages"
+T1.note1: "T1 / T2: Cùng nhận Payment-99 (duplicate)"
+T1 -> DB: "SELECT exists(id='P99')?"
+DB -> T1: "false  (CHECK)" { style.stroke-dash: 4 }
+T2 -> DB: "SELECT exists(id='P99')?"
+DB -> T2: "false  (CHECK — vẫn chưa ai ghi!)" { style.stroke-dash: 4 }
+T1 -> T1: "charge \$100  (USE)"
+T2 -> T2: "charge \$100  (USE — DOUBLE CHARGE 💥)"
+T1 -> DB: "INSERT id='P99'"
+T2 -> DB: "INSERT id='P99'  → có thể lỗi, nhưng tiền đã charge rồi!"
 ```
 
 Vấn đề cốt lõi: **CHECK và USE không nguyên tử (atomic)**. Việc `INSERT` ở cuối có UNIQUE constraint cũng **không cứu được**, vì tiền đã bị charge **trước khi** INSERT xảy ra.
@@ -401,22 +411,20 @@ Charge.create(params, options);   // gọi lại với CÙNG key → chỉ charg
 
 Stripe **lưu lại status code + response body** của request **đầu tiên** ứng với mỗi key — *bất kể nó thành công hay thất bại*. Mọi request sau với cùng key sẽ nhận **lại đúng kết quả đã cache đó**, kể cả lỗi `500`.
 
-```mermaid
-sequenceDiagram
-    participant C as Client
-    participant S as Stripe API
-    participant DB as Idempotency Store
-
-    C->>S: POST /charges (Key: K1)
-    S->>DB: K1 tồn tại? → CHƯA → tạo record, soft-lock
-    S->>S: charge $20 (thực thi)
-    S->>DB: lưu {K1, 200, body, fingerprint}, mở lock
-    S-->>C: 200 OK 💥 (response mất trên mạng)
-
-    Note over C: Timeout → retry CÙNG key
-    C->>S: POST /charges (Key: K1)
-    S->>DB: K1 tồn tại? → RỒI → trả response đã cache
-    S-->>C: 200 OK (KHÔNG charge lại) ✅
+```d2 title="5.2 Server làm gì với key"
+shape: sequence_diagram
+C: "Client"
+S: "Stripe API"
+DB: "Idempotency Store"
+C -> S: "POST /charges (Key: K1)"
+S -> DB: "K1 tồn tại? → CHƯA → tạo record, soft-lock"
+S -> S: "charge \$20 (thực thi)"
+S -> DB: "lưu {K1, 200, body, fingerprint}, mở lock"
+S -> C: "200 OK 💥 (response mất trên mạng)" { style.stroke-dash: 4 }
+C.note1: "Timeout → retry CÙNG key"
+C -> S: "POST /charges (Key: K1)"
+S -> DB: "K1 tồn tại? → RỒI → trả response đã cache"
+S -> C: "200 OK (KHÔNG charge lại) ✅" { style.stroke-dash: 4 }
 ```
 
 ### 5.3 Request fingerprint — chống dùng nhầm key
@@ -433,17 +441,23 @@ Lần 2: POST /charges  Key=K1  {amount: 9999}  → fingerprint KHÁC → ❌ l�
 
 Nếu một request thứ hai với **cùng key** đến **trong khi** request đầu **đang chạy**, Stripe trả `409 Conflict` thay vì chạy song song. Đây chính là **lá chắn TOCTOU**: việc "chèn record idempotency key đầu tiên" đóng vai trò **atomic claim / soft-lock** — chỉ một request được quyền thực thi, các request đua cùng key bị từ chối.
 
-```
-┌──────────────────────────────────────────────────────────────────┐
-│  Bản chất triển khai (khái niệm) — record cho mỗi key:           │
-│    idempotency_key   (UNIQUE)   ← atomic test-and-set            │
-│    request_fingerprint          ← so khớp params (mục 5.3)       │
-│    locked_at                    ← soft lock; request đua → 409   │
-│    recovery_point / state       ← đã chạy tới bước nào (5.5)     │
-│    response_code, response_body ← cache để trả lại (5.2)         │
-│    created_at                   ← prune sau ≥ 24h (5.6)          │
-└──────────────────────────────────────────────────────────────────┘
-```
+<Callout type="info">
+
+Bản chất triển khai (khái niệm) — record cho mỗi key:
+
+idempotency_key   (UNIQUE)   ← atomic test-and-set
+
+request_fingerprint          ← so khớp params (mục 5.3)
+
+locked_at                    ← soft lock; request đua → 409
+
+recovery_point / state       ← đã chạy tới bước nào (5.5)
+
+response_code, response_body ← cache để trả lại (5.2)
+
+created_at                   ← prune sau ≥ 24h (5.6)
+
+</Callout>
 
 > [!TIP]
 > Để ý sự tương đồng với **Fix 1 (insert-first + UNIQUE constraint)** ở mục 4.3: Stripe cũng "ghi dấu trước, rồi mới thực thi". UNIQUE key + soft-lock = cách diệt TOCTOU. Dedup logic ở Kafka consumer của bạn nên bắt chước đúng mô hình này.
@@ -511,17 +525,25 @@ spring:
 
 ## 7. Tổng kết
 
-```mermaid
-flowchart TD
-    A[Nhận message] --> B{Thao tác có<br/>natural idempotent?}
-    B -->|Có - SET/UPSERT/DELETE| C[✅ Strategy 1<br/>chạy thẳng, an toàn]
-    B -->|Không - INSERT/charge/email| D{Side-effect ở đâu?}
-    D -->|1 Database| E[✅ Insert-first + UNIQUE<br/>hoặc ON CONFLICT DO NOTHING]
-    D -->|External API| F[✅ Idempotency Key của provider]
-    D -->|Nhiều hệ thống| G[⚠️ Distributed lock + dedup]
-    E --> H[Commit offset SAU khi xong]
-    F --> H
-    G --> H
+```d2 title="7. Tổng kết"
+direction: down
+A: "Nhận message"
+B: "Thao tác có\nnatural idempotent?" { shape: diamond }
+C: "✅ Strategy 1\nchạy thẳng, an toàn"
+D: "Side-effect ở đâu?" { shape: diamond }
+E: "✅ Insert-first + UNIQUE\nhoặc ON CONFLICT DO NOTHING"
+F: "✅ Idempotency Key của provider"
+G: "⚠️ Distributed lock + dedup"
+H: "Commit offset SAU khi xong"
+A -> B
+B -> C: "Có - SET/UPSERT/DELETE"
+B -> D: "Không - INSERT/charge/email"
+D -> E: "1 Database"
+D -> F: "External API"
+D -> G: "Nhiều hệ thống"
+E -> H
+F -> H
+G -> H
 ```
 
 - **Idempotency** = lặp lại không đổi kết quả. Trong Kafka at-least-once, đây là **bắt buộc**, không phải tùy chọn.

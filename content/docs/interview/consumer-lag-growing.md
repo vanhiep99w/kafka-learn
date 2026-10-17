@@ -43,18 +43,21 @@ Câu hỏi này kiểm tra một điều: bạn có hiểu lag là **triệu ch�
 
 Trước khi tìm "vì sao lag tăng", phải hiểu rõ lag đo bằng gì. Một partition là một dòng message có thứ tự, mỗi message có một **offset** (số thứ tự):
 
-```
-┌───────────────────────────────────────────────────────────────┐
-│                     Partition 0 (Commit Log)                  │
-├─────┬─────┬─────┬─────┬─────┬─────┬─────┬─────┬─────┬─────┬───┤
-│ msg │ msg │ msg │ msg │ msg │ msg │ msg │ msg │ msg │ msg │ . │
-│  0  │  1  │  2  │  3  │  4  │  5  │  6  │  7  │  8  │  9  │ . │
-├─────┴─────┴─────┴─────┴─────┴─────┴─────┴─────┴─────┴─────┴───┤
-│  ↑                  ↑                                   ↑     │
-│ Offset 0          Offset 3                         Offset 9   │
-│ (cũ nhất)        (Consumer đang              (mới nhất = LEO) │
-│                     ở đây)                                    │
-└───────────────────────────────────────────────────────────────┘
+```d2 title="Consumer position và log end offset"
+direction: right
+log: "Partition 0 — commit log" {
+  m0: "Offset 0\nOldest"
+  m1: "Offset 1"
+  m2: "Offset 2"
+  m3: "Offset 3\nConsumer position"
+  m4: "Offset 4"
+  m5: "Offset 5"
+  m6: "Offset 6"
+  m7: "Offset 7"
+  m8: "Offset 8\nNewest record"
+  m0 -> m1 -> m2 -> m3 -> m4 -> m5 -> m6 -> m7 -> m8: Append order
+}
+leo: "Log end offset (LEO): 9\nVị trí kế tiếp sau record cuối"
 ```
 
 Có 2 con số quan trọng:
@@ -220,25 +223,16 @@ Nguyên nhân này rất khó đoán vì **bề ngoài trông giống "consumer 
 
 Mỗi consumer phải gọi `poll()` định kỳ để báo "tôi vẫn sống". Nếu khoảng cách giữa 2 lần poll **vượt `max.poll.interval.ms`** (mặc định 5 phút), Kafka coi consumer đã chết → trigger rebalance.
 
-```
-max.poll.interval.ms = 300000 (5 phút)
-Processing thực tế mỗi batch = 7 phút
-
-Timeline:
-   poll() batch 100 records ──▶ bắt đầu xử lý
-   │
-   │ ... xử lý ...
-   │
-   phút thứ 5: Kafka: "đã 5 phút chưa poll lại, consumer chết!"
-   phút thứ 5: Trigger rebalance → partition bị thu hồi + gán lại
-   │
-   phút thứ 7: Consumer xong, gọi poll() → "tôi không còn partition!"
-   phút thứ 7: Re-join group → nhận lại partition → poll batch mới
-   │ ... xử lý 7 phút ...
-   │ → lại vượt max.poll.interval → lại rebalance → ...
-   │
-   Kết quả: consumer luôn "giữ" partition < 5 phút rồi mất
-            → throughput thực tế gần = 0, lag tăng vọt
+```d2 title="Processing vượt poll interval gây rebalance lặp"
+direction: right
+poll: "poll() — 100 records"
+process: "Processing 7 phút"
+timeout: "Phút 5\nmax.poll.interval.ms = 300000 hết hạn"
+revoke: Rebalance — thu hồi partition
+finish: "Phút 7\nXử lý xong, poll() nhưng không còn assignment"
+join: Rejoin group
+poll -> process -> timeout -> revoke -> finish -> join -> poll
+note: "Giữ partition < 5 phút mỗi vòng\nThroughput giảm mạnh, lag tăng"
 ```
 
 ### Vì sao nguy hiểm?
@@ -283,20 +277,15 @@ Nguyên nhân cuối: consumer bị **block** ngoài ý muốn. Hai thủ phạm
 
 Java consumer có thể bị **Garbage Collection pause** vài giây. Trong lúc GC, consumer "đứng" không gọi poll → nếu pause lâu hơn `session.timeout.ms` → Kafka tưởng consumer chết → rebalance → lag tăng.
 
-```
-Consumer đang xử lý bình thường
-   │
-   ▼
-GC pause 60 giây (heap quá đầy)
-   │
-   ▼
-session.timeout.ms = 45 giây → Kafka: "consumer chết!"
-   │
-   ▼
-Trigger rebalance → partition gán cho consumer khác
-   │
-   ▼
-Consumer sống lại sau GC → không còn partition → join lại → rebalance tiếp
+```d2 title="GC pause dài hơn session timeout"
+direction: right
+running: Consumer xử lý bình thường
+gc: "GC pause 60s\nHeap quá đầy"
+timeout: "session.timeout.ms = 45s\nCoordinator coi consumer đã chết"
+rebalance: Rebalance — gán partition cho consumer khác
+recover: "Consumer trở lại\nKhông còn partition → join lại"
+running -> gc -> timeout -> rebalance -> recover
+recover -> rebalance: Rebalance tiếp
 ```
 
 **Dấu hiệu**: GC log có pause > 1 giây, lag tăng đúng lúc GC pause.
@@ -325,20 +314,33 @@ Consumer gọi downstream API:
 
 ## 9. Quy trình chẩn đoán 5 bước
 
-```mermaid
-flowchart TD
-    A["Lag tăng dần"] --> B["Bước 1: xem lag PER PARTITION"]
-    B --> C{Một partition lag cao hẳn?}
-    C -->|"Có"| D["➡ Partition skew<br/>(hot key)"]
-    C -->|"Không, đều"| E["Bước 2: xem CONSUMER-ID có thay đổi liên tục?"]
-    E --> F{Rebalance liên tục?}
-    F -->|"Có"| G["➡ max.poll.interval.ms quá nhỏ<br/>hoặc processing quá chậm"]
-    F -->|"Không"| H["Bước 3: xem CPU consumer + downstream latency"]
-    H --> I{DB/API chậm?}
-    I -->|"Có"| J["➡ Dependency bottleneck"]
-    I -->|"Không"| K["Bước 4: số consumer < số partition?"]
-    K -->|"Có"| L["➡ Thêm consumer"]
-    K -->|"Không"| M["Bước 5: optimize processing<br/>hoặc tăng partition"]
+```d2 title="9. Quy trình chẩn đoán 5 bước"
+direction: down
+A: "Lag tăng dần"
+B: "Bước 1: xem lag PER PARTITION"
+C: "Một partition lag cao hẳn?" { shape: diamond }
+D: "➡ Partition skew\n(hot key)"
+E: "Bước 2: xem CONSUMER-ID có thay đổi liên tục?"
+F: "Rebalance liên tục?" { shape: diamond }
+G: "➡ max.poll.interval.ms quá nhỏ\nhoặc processing quá chậm"
+H: "Bước 3: xem CPU consumer + downstream latency"
+I: "DB/API chậm?" { shape: diamond }
+J: "➡ Dependency bottleneck"
+K: "Bước 4: số consumer < số partition?"
+L: "➡ Thêm consumer"
+M: "Bước 5: optimize processing\nhoặc tăng partition"
+A -> B
+B -> C
+C -> D: "Có"
+C -> E: "Không, đều"
+E -> F
+F -> G: "Có"
+F -> H: "Không"
+H -> I
+I -> J: "Có"
+I -> K: "Không"
+K -> L: "Có"
+K -> M: "Không"
 ```
 
 ### Bảng tra nhanh nguyên nhân theo triệu chứng
@@ -439,20 +441,25 @@ Fix dài hạn:
 
 ### Cheat sheet
 
-```
-╔═══════════════════════════════════════════════════════════════╗
-║  Lag = LEO − Committed Offset                                 ║
-║  Luôn xem lag PER PARTITION, không chỉ tổng                   ║
-║  ───────────────────────────────────────────────────────────  ║
-║  Lag đều       → processing chậm / thiếu consumer             ║
-║  Lag 1-2 P     → partition skew (hot key)                     ║
-║  Lag + rebal.  → max.poll.interval.ms < processing time       ║
-║  Lag + GC/dep. → downstream đang bệnh                         ║
-║  ───────────────────────────────────────────────────────────  ║
-║  Thêm consumer giúp ⇔ còn partition trống                     ║
-║  Giảm max.poll.records ⇔ làm batch xong trong poll interval   ║
-╚═══════════════════════════════════════════════════════════════╝
-```
+<Callout type="info">
+
+Lag = LEO − Committed Offset
+
+Luôn xem lag PER PARTITION, không chỉ tổng
+
+Lag đều       → processing chậm / thiếu consumer
+
+Lag 1-2 P     → partition skew (hot key)
+
+Lag + rebal.  → max.poll.interval.ms &lt; processing time
+
+Lag + GC/dep. → downstream đang bệnh
+
+Thêm consumer giúp ⇔ còn partition trống
+
+Giảm max.poll.records ⇔ làm batch xong trong poll interval
+
+</Callout>
 
 ### 3 nguyên tắc áp dụng ngay
 
