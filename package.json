@@ -12,19 +12,19 @@
   },
   "dependencies": {
     "@vanhiep99w/docs-kit": "^0.9.0",
-    "fumadocs-core": "^16.12.1",
-    "fumadocs-mdx": "^15.2.0",
-    "fumadocs-ui": "^16.12.1",
-    "next": "^16.2.12",
-    "react": "^19.2.8",
-    "react-dom": "^19.2.8",
+    "fumadocs-core": "16.17.5",
+    "fumadocs-mdx": "15.4.7",
+    "fumadocs-ui": "16.17.5",
+    "next": "16.4.2",
+    "react": "19.3.1",
+    "react-dom": "19.3.1",
     "remark-github-admonitions-to-directives": "^2.1.0"
   },
   "devDependencies": {
     "@types/mdx": "^2.0.14",
     "@types/node": "^22.20.1",
-    "@types/react": "^19.2.17",
-    "@types/react-dom": "^19.2.3",
+    "@types/react": "19.3.0",
+    "@types/react-dom": "19.3.0",
     "remark-parse": "^11.0.0",
     "typescript": "^5.7.0",
     "unified": "^11.0.5"
