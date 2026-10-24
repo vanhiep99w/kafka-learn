@@ -190,7 +190,25 @@ Với config `attempts = "4"` và topic `orders`:
 
 ### Sequence Diagram với Exponential Backoff
 
-```d2 title="Sequence Diagram với Exponential Backoff"
+> Playback dưới đây minh họa thứ tự các bước do tác giả chọn; không gửi request thật, không mô phỏng concurrency và tốc độ phát không phải latency. Bạn có thể chạy hoặc xem từng bước.
+
+```d2 title="Sequence Diagram với Exponential Backoff" mode=flow interactive=true
+# @flow
+# scenarios:
+#   - id: main
+#     label: "Kịch bản minh họa"
+#     steps:
+#       - edge: "(Main -> Main)[0]"
+#         description: "orders → orders: Process msg 💥 Fail"
+#       - edge: "(Main -> R0)[0]"
+#         description: "orders → orders-retry-0: Move to retry-0 (immediately)"
+#       - edge: "(R0 -> R0)[0]"
+#         description: "orders-retry-0 → orders-retry-0: Process msg 💥 Fail"
+#       - edge: "(R0 -> R1)[0]"
+#         description: "orders-retry-0 → orders-retry-1: Move to retry-1"
+#       - edge: "(R1 -> R1)[0]"
+#         description: "orders-retry-1 → orders-retry-1: Process msg"
+# @endflow
 shape: sequence_diagram
 Main: "orders"
 R0: "orders-retry-0"

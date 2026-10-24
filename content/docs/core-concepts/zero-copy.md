@@ -47,7 +47,23 @@ Một consumer gửi `FetchRequest` đến leader broker, yêu cầu record từ
 
 Nếu mỗi lần fetch broker phải đọc bytes từ kernel vào một `byte[]`/`ByteBuffer` của JVM, sau đó lại ghi bytes đó xuống kernel socket buffer, CPU sẽ tốn công copy dữ liệu lớn qua lại. Với nhiều consumer, follower replica và payload lớn, chi phí này nhanh chóng trở thành bottleneck.
 
-```d2 title="Bài toán khi gửi dữ liệu từ disk ra network"
+> Playback dưới đây minh họa thứ tự các bước do tác giả chọn; không gửi request thật, không mô phỏng concurrency và tốc độ phát không phải latency. Bạn có thể chạy hoặc xem từng bước.
+
+```d2 title="Bài toán khi gửi dữ liệu từ disk ra network" mode=flow interactive=true
+# @flow
+# scenarios:
+#   - id: main
+#     label: "Kịch bản minh họa"
+#     steps:
+#       - edge: "(C -> B)[0]"
+#         description: "Consumer hoặc follower → Kafka broker: Fetch(offset, maxBytes)"
+#       - edge: "(B -> L)[0]"
+#         description: "Kafka broker → Log segment: Lấy batch record"
+#       - edge: "(B -> N)[0]"
+#         description: "Kafka broker → Network socket: Gửi payload"
+#       - edge: "(N -> C)[0]"
+#         description: "Network socket → Consumer hoặc follower: TCP response"
+# @endflow
 shape: sequence_diagram
 C: "Consumer hoặc follower"
 B: "Kafka broker"

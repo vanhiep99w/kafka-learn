@@ -58,7 +58,25 @@ Kafka ở chế độ phổ biến nhất là **at-least-once**. Duplicate là c
 | Consumer group **rebalance** | Partition bị reassign giữa chừng → message được xử lý lại bởi consumer khác |
 | Reprocessing / replay | Reset offset để chạy lại, hoặc deploy lại service |
 
-```d2 title="Vì sao Kafka bắt buộc phải quan tâm idempotency?"
+> Playback dưới đây minh họa thứ tự các bước do tác giả chọn; không gửi request thật, không mô phỏng concurrency và tốc độ phát không phải latency. Bạn có thể chạy hoặc xem từng bước.
+
+```d2 title="Vì sao Kafka bắt buộc phải quan tâm idempotency?" mode=flow interactive=true
+# @flow
+# scenarios:
+#   - id: main
+#     label: "Kịch bản minh họa"
+#     steps:
+#       - edge: "(C -> K)[0]"
+#         description: "Consumer → Kafka: poll() → {orderId:123, action:\"ship\"}"
+#       - edge: "(C -> DB)[0]"
+#         description: "Consumer → Database: UPDATE orders SET status='shipped' WHERE id=123"
+#       - edge: "(DB -> C)[0]"
+#         description: "Database → Consumer: OK"
+#       - edge: "(C -> K)[1]"
+#         description: "Consumer → Kafka: poll() → CÙNG message {orderId:123}"
+#       - edge: "(C -> DB)[1]"
+#         description: "Consumer → Database: Xử lý LẠI lần 2"
+# @endflow
 shape: sequence_diagram
 K: "Kafka"
 C: "Consumer"
@@ -411,7 +429,29 @@ Charge.create(params, options);   // gọi lại với CÙNG key → chỉ charg
 
 Stripe **lưu lại status code + response body** của request **đầu tiên** ứng với mỗi key — *bất kể nó thành công hay thất bại*. Mọi request sau với cùng key sẽ nhận **lại đúng kết quả đã cache đó**, kể cả lỗi `500`.
 
-```d2 title="5.2 Server làm gì với key"
+```d2 title="5.2 Server làm gì với key" mode=flow interactive=true
+# @flow
+# scenarios:
+#   - id: main
+#     label: "Kịch bản minh họa"
+#     steps:
+#       - edge: "(C -> S)[0]"
+#         description: "Client → Stripe API: POST /charges (Key: K1)"
+#       - edge: "(S -> DB)[0]"
+#         description: "Stripe API → Idempotency Store: K1 tồn tại? → CHƯA → tạo record, soft-lock"
+#       - edge: "(S -> S)[0]"
+#         description: "Stripe API → Stripe API: charge $20 (thực thi)"
+#       - edge: "(S -> DB)[1]"
+#         description: "Stripe API → Idempotency Store: lưu {K1, 200, body, fingerprint}, mở lock"
+#       - edge: "(S -> C)[0]"
+#         description: "Stripe API → Client: 200 OK 💥 (response mất trên mạng)"
+#       - edge: "(C -> S)[1]"
+#         description: "Client → Stripe API: POST /charges (Key: K1)"
+#       - edge: "(S -> DB)[2]"
+#         description: "Stripe API → Idempotency Store: K1 tồn tại? → RỒI → trả response đã cache"
+#       - edge: "(S -> C)[1]"
+#         description: "Stripe API → Client: 200 OK (KHÔNG charge lại) ✅"
+# @endflow
 shape: sequence_diagram
 C: "Client"
 S: "Stripe API"
