@@ -153,7 +153,7 @@ shape: sequence_diagram
 p: Producer
 b: Broker
 p -> b: Send msg A — broker nhận được
-p -> p: Timeout / mất response {style.stroke-dash: 4}
+b -> p: Timeout / mất response {style.stroke-dash: 4; target-arrowhead.shape: cross}
 p -> b: Retry msg A
 b.note: "Không dedup → msg A có thể ghi hai lần"
 ```

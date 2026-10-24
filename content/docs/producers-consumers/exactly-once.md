@@ -301,7 +301,7 @@ P: "Producer (PID=1001)"
 B: "Kafka partition"
 P -> B: "send Order-123, sequence=7"
 B -> B: "ghi tại offset 100"
-P -> P: "Timeout: ACK không đến producer" { style.stroke-dash: 4 }
+B -> P: "✕ ACK bị mất trên mạng" { style.stroke-dash: 4; target-arrowhead.shape: cross }
 P -> B: "retry Order-123, sequence=7"
 B -> B: "nhận ra PID + sequence đã ghi"
 B -> P: "trả ACK cũ, không ghi record mới" { style.stroke-dash: 4 }
