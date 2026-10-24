@@ -79,25 +79,7 @@ Nếu tất cả event của một đơn hàng phải đúng thứ tự, produce
 
 Khi producer gửi record đến leader của partition, leader broker thực hiện append vào active segment. Với topic có replication, follower replica fetch record từ leader để sao chép log đó.
 
-> Playback dưới đây minh họa thứ tự các bước do tác giả chọn; không gửi request thật, không mô phỏng concurrency và tốc độ phát không phải latency. Bạn có thể chạy hoặc xem từng bước.
-
-```d2 title="Luồng ghi record" mode=flow interactive=true
-# @flow
-# scenarios:
-#   - id: main
-#     label: "Kịch bản minh họa"
-#     steps:
-#       - edge: "(P -> L)[0]"
-#         description: "Producer → Leader broker: Produce(record)"
-#       - edge: "(L -> S)[0]"
-#         description: "Leader broker → Active log segment: Append record vào cuối segment"
-#       - edge: "(L -> F)[0]"
-#         description: "Leader broker → Follower replica: Replica fetch có record mới"
-#       - edge: "(F -> L)[0]"
-#         description: "Follower replica → Leader broker: Replica ack"
-#       - edge: "(L -> P)[0]"
-#         description: "Leader broker → Producer: Produce response theo acks"
-# @endflow
+```d2 title="Luồng ghi record"
 shape: sequence_diagram
 P: "Producer"
 L: "Leader broker"
@@ -173,25 +155,7 @@ Index thưa không lưu entry cho mọi record. Kafka tìm entry gần nhất tr
 
 Consumer không “pop” record khỏi Kafka. Consumer gửi fetch request với vị trí hiện tại, chẳng hạn offset `1050`. Broker xác định segment chứa offset đó, dùng index để tìm gần đúng, sau đó trả về một batch record bắt đầu từ vị trí phù hợp.
 
-```d2 title="Đọc record theo offset" mode=flow interactive=true
-# @flow
-# scenarios:
-#   - id: main
-#     label: "Kịch bản minh họa"
-#     steps:
-#       - edge: "(C -> B)[0]"
-#         description: "Consumer → Leader broker: Fetch từ offset 1050"
-#       - edge: "(B -> I)[0]"
-#         description: "Leader broker → Offset index: Tìm entry gần 1050"
-#       - edge: "(I -> B)[0]"
-#         description: "Offset index → Leader broker: offset 1048 → byte position"
-#       - edge: "(B -> L)[0]"
-#         description: "Leader broker → Log segment: Đọc tuần tự từ byte position"
-#       - edge: "(L -> B)[0]"
-#         description: "Log segment → Leader broker: Batch 1050..n"
-#       - edge: "(B -> C)[0]"
-#         description: "Leader broker → Consumer: Fetch response"
-# @endflow
+```d2 title="Đọc record theo offset"
 shape: sequence_diagram
 C: "Consumer"
 B: "Leader broker"

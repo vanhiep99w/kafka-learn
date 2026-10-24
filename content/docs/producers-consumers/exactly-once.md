@@ -84,21 +84,7 @@ Không thể atomically gộp database, API bên thứ ba và Kafka offset chỉ
 
 Với consumer, cách quen thuộc để có at-most-once là **commit offset trước business logic**:
 
-> Playback dưới đây minh họa thứ tự các bước do tác giả chọn; không gửi request thật, không mô phỏng concurrency và tốc độ phát không phải latency. Bạn có thể chạy hoặc xem từng bước.
-
-```d2 title="Luồng xử lý và failure window" mode=flow interactive=true
-# @flow
-# scenarios:
-#   - id: main
-#     label: "Kịch bản minh họa"
-#     steps:
-#       - edge: "(K -> C)[0]"
-#         description: "Kafka → Consumer: record offset=42"
-#       - edge: "(C -> K)[0]"
-#         description: "Consumer → Kafka: commit offset=43"
-#       - edge: "(C -> DB)[0]"
-#         description: "Consumer → Database: ghi side effect"
-# @endflow
+```d2 title="Luồng xử lý và failure window"
 shape: sequence_diagram
 K: "Kafka"
 C: "Consumer"
@@ -167,23 +153,7 @@ public void consume(ConsumerRecord<String, AnalyticsEvent> record, Acknowledgmen
 
 Để đạt at-least-once ở consumer, đảo thứ tự: **xử lý business trước, commit offset sau**.
 
-```d2 title="Luồng xử lý và failure window" mode=flow interactive=true
-# @flow
-# scenarios:
-#   - id: main
-#     label: "Kịch bản minh họa"
-#     steps:
-#       - edge: "(K -> C)[0]"
-#         description: "Kafka → Consumer: record offset=42, eventId=evt-9"
-#       - edge: "(C -> DB)[0]"
-#         description: "Consumer → Database: áp dụng business change cho evt-9"
-#       - edge: "(DB -> C)[0]"
-#         description: "Database → Consumer: success"
-#       - edge: "(K -> C)[1]"
-#         description: "Kafka → Consumer: redeliver offset=42 sau restart/rebalance"
-#       - edge: "(C -> DB)[1]"
-#         description: "Consumer → Database: áp dụng lại evt-9"
-# @endflow
+```d2 title="Luồng xử lý và failure window"
 shape: sequence_diagram
 K: "Kafka"
 C: "Consumer"
@@ -325,25 +295,7 @@ Nếu transaction commit thành công, output record **và** offset cùng xuất
 
 Idempotent producer là một building block quan trọng, nhưng phạm vi của nó hẹp hơn EOS:
 
-```d2 title="Idempotent producer không phải end-to-end EOS" mode=flow interactive=true
-# @flow
-# scenarios:
-#   - id: main
-#     label: "Kịch bản minh họa"
-#     steps:
-#       - edge: "(P -> B)[0]"
-#         description: "Producer (PID=1001) → Kafka partition: send Order-123, sequence=7"
-#       - edge: "(B -> B)[0]"
-#         description: "Kafka partition → Kafka partition: ghi tại offset 100"
-#       - edge: "(P -> P)[0]"
-#         description: "Producer (PID=1001) → Producer (PID=1001): Timeout: ACK không đến producer"
-#       - edge: "(P -> B)[1]"
-#         description: "Producer (PID=1001) → Kafka partition: retry Order-123, sequence=7"
-#       - edge: "(B -> B)[1]"
-#         description: "Kafka partition → Kafka partition: nhận ra PID + sequence đã ghi"
-#       - edge: "(B -> P)[0]"
-#         description: "Kafka partition → Producer (PID=1001): trả ACK cũ, không ghi record mới"
-# @endflow
+```d2 title="Idempotent producer không phải end-to-end EOS"
 shape: sequence_diagram
 P: "Producer (PID=1001)"
 B: "Kafka partition"
@@ -370,27 +322,7 @@ Tuy nhiên, idempotent producer không giải quyết các trường hợp sau:
 
 Luồng sau minh họa failure path. Từ góc nhìn consumer downstream dùng `read_committed`, không có output "mồ côi" nào được nhìn thấy.
 
-```d2 title="Kafka transaction cho luồng Kafka → Kafka" mode=flow interactive=true
-# @flow
-# scenarios:
-#   - id: main
-#     label: "Kịch bản minh họa"
-#     steps:
-#       - edge: "(In -> App)[0]"
-#         description: "orders-raw → Enrichment service: poll offset 42"
-#       - edge: "(App -> App)[0]"
-#         description: "Enrichment service → Enrichment service: begin Kafka transaction"
-#       - edge: "(App -> Out)[0]"
-#         description: "Enrichment service → orders-enriched: send enriched event (pending)"
-#       - edge: "(App -> Offset)[0]"
-#         description: "Enrichment service → __consumer_offsets: add offset 43 to transaction"
-#       - edge: "(App -> Out)[1]"
-#         description: "Enrichment service → orders-enriched: abort transaction"
-#       - edge: "(In -> App)[1]"
-#         description: "orders-raw → Enrichment service: redeliver offset 42"
-#       - edge: "(App -> App)[1]"
-#         description: "Enrichment service → Enrichment service: retry và commit transaction"
-# @endflow
+```d2 title="Kafka transaction cho luồng Kafka → Kafka"
 shape: sequence_diagram
 In: "orders-raw"
 App: "Enrichment service"

@@ -115,33 +115,7 @@ public class OrderService {
 
 ### Happy Path
 
-> Playback dưới đây minh họa thứ tự các bước do tác giả chọn; không gửi request thật, không mô phỏng concurrency và tốc độ phát không phải latency. Bạn có thể chạy hoặc xem từng bước.
-
-```d2 title="Happy Path" mode=flow interactive=true
-# @flow
-# scenarios:
-#   - id: main
-#     label: "Kịch bản minh họa"
-#     steps:
-#       - edge: "(Client -> App)[0]"
-#         description: "Client → Order Service: POST /orders"
-#       - edge: "(App -> DB)[0]"
-#         description: "Order Service → Database: BEGIN TRANSACTION"
-#       - edge: "(App -> DB)[1]"
-#         description: "Order Service → Database: INSERT INTO orders (id='ord-123', ...)"
-#       - edge: "(App -> Kafka)[0]"
-#         description: "Order Service → Kafka Broker: Begin Kafka Tx (txId=tx-order-1-0)"
-#       - edge: "(App -> Kafka)[1]"
-#         description: "Order Service → Kafka Broker: ProducerRecord(topic=orders.created, key=ord-123)"
-#       - edge: "(App -> DB)[2]"
-#         description: "Order Service → Database: COMMIT ✅"
-#       - edge: "(App -> Kafka)[2]"
-#         description: "Order Service → Kafka Broker: COMMIT Transaction ✅"
-#       - edge: "(Kafka -> Consumer)[0]"
-#         description: "Kafka Broker → Downstream Consumer: Deliver message"
-#       - edge: "(App -> Client)[0]"
-#         description: "Order Service → Client: 201 Created"
-# @endflow
+```d2 title="Happy Path"
 shape: sequence_diagram
 Client: "Client"
 App: "Order Service"
@@ -163,23 +137,7 @@ App -> Client: "201 Created" { style.stroke-dash: 4 }
 
 ### Error Path
 
-```d2 title="Error Path" mode=flow interactive=true
-# @flow
-# scenarios:
-#   - id: main
-#     label: "Kịch bản minh họa"
-#     steps:
-#       - edge: "(App -> DB)[0]"
-#         description: "Order Service → Database: BEGIN TRANSACTION"
-#       - edge: "(App -> DB)[1]"
-#         description: "Order Service → Database: INSERT INTO orders (id='ord-123', ...)"
-#       - edge: "(App -> Kafka)[0]"
-#         description: "Order Service → Kafka Broker: ProducerRecord(topic=orders.created, ...)"
-#       - edge: "(App -> DB)[2]"
-#         description: "Order Service → Database: ROLLBACK ❌"
-#       - edge: "(App -> Kafka)[1]"
-#         description: "Order Service → Kafka Broker: ABORT Transaction ❌"
-# @endflow
+```d2 title="Error Path"
 shape: sequence_diagram
 App: "Order Service"
 DB: "Database"
@@ -423,27 +381,7 @@ g2.Debezium -> g2.K2: "< 100ms latency"
 
 Khi bạn cần **đọc từ một Kafka topic, transform, và ghi vào topic khác** một cách atomic — Kafka transactions hoạt động hoàn hảo.
 
-```d2 title="Consume-Transform-Produce (Kafka → Kafka)" mode=flow interactive=true
-# @flow
-# scenarios:
-#   - id: main
-#     label: "Kịch bản minh họa"
-#     steps:
-#       - edge: "(App -> Input)[0]"
-#         description: "Enrichment Service → orders-raw: poll()"
-#       - edge: "(Input -> App)[0]"
-#         description: "orders-raw → Enrichment Service: Messages [offset 0-10]"
-#       - edge: "(App -> App)[0]"
-#         description: "Enrichment Service → Enrichment Service: Enrich with customer data"
-#       - edge: "(App -> Output)[0]"
-#         description: "Enrichment Service → orders-enriched: send(enriched) [in tx]"
-#       - edge: "(App -> Offsets)[0]"
-#         description: "Enrichment Service → __consumer_offsets: sendOffsetsToTransaction([0-10]) [in tx]"
-#       - edge: "(App -> Output)[1]"
-#         description: "Enrichment Service → orders-enriched: Commit ✅"
-#       - edge: "(App -> Offsets)[1]"
-#         description: "Enrichment Service → __consumer_offsets: Commit ✅"
-# @endflow
+```d2 title="Consume-Transform-Produce (Kafka → Kafka)"
 shape: sequence_diagram
 Input: "orders-raw"
 App: "Enrichment Service"

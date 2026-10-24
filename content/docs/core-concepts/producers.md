@@ -148,21 +148,7 @@ all: "acks=all / -1" {p: Producer; l: Leader; f1: ISR follower 1; f2: ISR follow
 
 ### Vấn đề với Retry đơn giản
 
-> Playback dưới đây minh họa thứ tự các bước do tác giả chọn; không gửi request thật, không mô phỏng concurrency và tốc độ phát không phải latency. Bạn có thể chạy hoặc xem từng bước.
-
-```d2 title="Retry sau timeout có thể tạo duplicate" mode=flow interactive=true
-# @flow
-# scenarios:
-#   - id: main
-#     label: "Kịch bản minh họa"
-#     steps:
-#       - edge: "(p -> b)[0]"
-#         description: "Producer → Broker: Send msg A — broker nhận được"
-#       - edge: "(p -> p)[0]"
-#         description: "Producer → Producer: Timeout / mất response"
-#       - edge: "(p -> b)[1]"
-#         description: "Producer → Broker: Retry msg A"
-# @endflow
+```d2 title="Retry sau timeout có thể tạo duplicate"
 shape: sequence_diagram
 p: Producer
 b: Broker
